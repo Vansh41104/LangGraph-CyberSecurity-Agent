@@ -1,0 +1,7 @@
+langchain
+streamlit
+python-dotenv
+pytest
+networkx
+langgraph
+langchain_openai
