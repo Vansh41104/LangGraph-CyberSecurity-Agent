@@ -20,7 +20,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Agentic Cybersecurity Pipeline")
     
     # Define command line arguments
-    parser.add_argument("-t", "--task", required=True, help="Security task description (e.g., 'Scan for open ports')")
+    parser.add_argument("-t", "--task", help="Security task description (e.g., 'Scan for open ports')")
     parser.add_argument("-d", "--domains", nargs="+", default=[], help="Target domains (e.g., example.com *.example.org)")
     parser.add_argument("-i", "--ip-ranges", nargs="+", default=[], help="Target IP ranges (e.g., 192.168.1.0/24 10.0.0.1)")
     parser.add_argument("-o", "--output", help="Output file for the report (default: report_YYYYMMDD_HHMMSS.json)")
@@ -44,26 +44,18 @@ def run_workflow(security_task, domains, ip_ranges, stream=False):
         logger.info(f"Starting cybersecurity pipeline with task: {security_task}")
         logger.info(f"Target scope: domains={domains}, ip_ranges={ip_ranges}")
         
-        # Initialize the components
-        scope_validator = ScopeValidator()
-        # scope_validator.add_domain("google.com")
-        task_manager = TaskManager()
-        
         # Initialize the workflow
         workflow = CybersecurityWorkflow()
         result = workflow.run(
-                objectives=["Scan for open ports"],
-                scope_config={
+            objectives=[security_task],  # Changed from fixed list to the actual security task
+            scope_config={
                 "domains": domains,
                 "ip_ranges": ip_ranges
             }
         )
-
-        # Start the workflow
-        workflow.start(security_task, stream=stream)
         
-        # Generate and return the report
-        return generate_report(task_manager)
+        # Return the result directly from the workflow run
+        return result
         
     except Exception as e:
         logger.error(f"Error running workflow: {str(e)}")
@@ -182,30 +174,31 @@ def main():
         return
     
     # Run the workflow
-    report = run_workflow(
+    result = run_workflow(
         security_task=args.task,
         domains=args.domains,
         ip_ranges=args.ip_ranges,
         stream=args.stream
     )
     
-    # Save the report if workflow was successful
-    if report:
+    # Process the workflow result
+    if result and "report" in result:
+        report = result["report"]
         save_report(report, args.output)
         
         # Print summary to console
         print("\nExecution Summary:")
         print("-----------------")
-        print(f"Total Tasks: {report['summary']['total_tasks']}")
-        print(f"Completed Tasks: {report['summary']['completed_tasks']}")
-        print(f"Failed Tasks: {report['summary']['failed_tasks']}")
-        print(f"Vulnerabilities Found: {len(report['vulnerabilities'])}")
+        if "execution_summary" in report:
+            print(f"Total Tasks: {report['execution_summary']['total_tasks']}")
+            print(f"Completed Tasks: {report['execution_summary']['completed_tasks']}")
+            print(f"Failed Tasks: {report['execution_summary']['failed_tasks']}")
+            print(f"Skipped Tasks: {report['execution_summary']['skipped_tasks']}")
         
-        if report['vulnerabilities']:
-            print("\nVulnerabilities Found:")
-            print("----------------------")
-            for i, vuln in enumerate(report['vulnerabilities']):
-                print(f"{i+1}. {vuln['description']} (Task ID: {vuln['task_id']})")
+        # Display report content
+        print("\nReport Content:")
+        print("--------------")
+        print(report.get("content", "No content available"))
     else:
         print("Workflow execution failed. Check logs for details.")
 
