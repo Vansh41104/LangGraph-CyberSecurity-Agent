@@ -17,7 +17,7 @@ from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, END, START
 
 # Import scan wrappers
-from scans.nmap_scan import NmapScanner
+from scan.nmap_scan import NmapScanner
 # Import utility modules
 from utils.task_manager import TaskManager, Task, TaskStatus
 from utils.scope import ScopeValidator
@@ -42,7 +42,7 @@ class AgentState(BaseModel):
 def get_llm(model="llama-3.3-70b-versatile", temperature=0):
     return ChatGroq(model=model, temperature=temperature)
 
-# Task decomposition prompt - Simplified for efficiency
+# Task decomposition prompt - Updated for proper parameter formatting
 TASK_DECOMPOSITION_PROMPT = '''
 You are an expert cybersecurity analyst. Break down the following high-level security objective into concrete tasks:
 
@@ -52,12 +52,17 @@ TARGET SCOPE: {scope}
 Available tool:
 1. nmap - For network mapping and port scanning
 
+For nmap tasks, please provide parameters in this format:
+- For simple ping scan: {{"target": "domain.com", "scan_type": "ping"}}
+- For port scan: {{"target": "domain.com", "scan_type": "syn", "ports": "1-1000"}}
+- For service detection: {{"target": "domain.com", "scan_type": "syn", "ports": "1-1000", "version_detection": true}}
+
 Each task should be a JSON object with:
 - "id": unique identifier (string)
 - "name": descriptive task name (string)
 - "description": detailed description (string)
 - "tool": tool to use ("nmap")
-- "params": JSON object with tool-specific parameters
+- "params": JSON object with tool-specific parameters (use the format shown above, **including the target parameter**)
 - "depends_on": array of task IDs this task depends on
 
 Return a JSON array of task objects. No extra text, just valid JSON.
@@ -77,15 +82,14 @@ Determine if any new tasks should be added. Focus on:
 3. Confirming uncertain results
 
 For each new task, provide:
-```json
 [
   {
     "id": "unique_id",
-    "name": "Descriptive task name", 
+    "name": "Descriptive task name",
     "description": "Detailed description",
-    "tool": "tool_name",
-    "params": {"arg1": "value1", "arg2": "value2"},
-    "depends_on": ["dependency_task_id"]
+    "tool": "nmap",
+    "params": {"target": "domain.com", "scan_type": "syn", "ports": "1-1000"},
+    "depends_on": []
   }
 ]
 '''
@@ -116,13 +120,13 @@ def extract_json_array(text: str) -> List[Dict[str, Any]]:
     # Find the first occurrence of '[' and the last occurrence of ']'
     start = text.find('[')
     end = text.rfind(']') + 1
-    
+
     if start == -1 or end == 0:
         logger.error("No JSON array found in the text.")
         raise ValueError("No JSON array found in the text.")
-    
+
     json_array_str = text[start:end]
-    
+
     try:
         json_array = json.loads(json_array_str)
         if isinstance(json_array, list):
@@ -138,27 +142,26 @@ class CybersecurityWorkflow:
     """
     Manages the LangGraph workflow for cybersecurity tasks.
     """
-    
+
     def __init__(self, llm=None):
         """Initialize the workflow with tools and LLM."""
         self.llm = llm or get_llm()
         self.task_manager = TaskManager()
         self.scope_validator = ScopeValidator()
-        
+
         # Initialize security tools
         self.tools = {
             "nmap": NmapScanner(),
         }
 
-        
         # Create the workflow graph
         self.workflow = self._build_workflow()
-    
+
     def _build_workflow(self) -> StateGraph:
         """Build the LangGraph workflow."""
         # Create the graph using the official LangGraph StateGraph
         workflow = StateGraph(AgentState)
-        
+
         # Define nodes
         workflow.add_node("decompose_tasks", self._decompose_tasks)
         workflow.add_node("select_next_task", self._select_next_task)
@@ -166,13 +169,13 @@ class CybersecurityWorkflow:
         workflow.add_node("execute_task", self._execute_task)
         workflow.add_node("analyze_results", self._analyze_results)
         workflow.add_node("generate_report", self._generate_report)
-        
+
         # Add the START edge to define the entrypoint
         workflow.add_edge(START, "decompose_tasks")
-        
+
         # Define the rest of the edges
         workflow.add_edge("decompose_tasks", "select_next_task")
-        
+
         workflow.add_conditional_edges(
             "select_next_task",
             self._has_next_task,
@@ -181,7 +184,7 @@ class CybersecurityWorkflow:
                 False: "generate_report"
             }
         )
-        
+
         workflow.add_conditional_edges(
             "check_scope",
             self._check_scope_condition,  # Using the renamed function
@@ -190,34 +193,37 @@ class CybersecurityWorkflow:
                 False: "select_next_task"
             }
         )
-        
+
         workflow.add_edge("execute_task", "analyze_results")
         workflow.add_edge("analyze_results", "select_next_task")
         workflow.add_edge("generate_report", END)
-        
+
         return workflow
 
-    # Add this function with a different name
+    # Renamed function to check scope condition
     def _check_scope_condition(self, state: AgentState) -> bool:
         """Determine if the current task is in scope."""
         task_id = state.current_task_id
         if not task_id:
             return False
-        
+
         # Rebuild task manager from state
         if isinstance(state.task_manager, dict):
             self.task_manager.from_dict(state.task_manager)
-        
+
         task = self.task_manager.get_task(task_id)
         if not task:
             return False
-            
+
         # Check if the task was skipped due to scope issues
         return task.status != TaskStatus.SKIPPED
 
     def _decompose_tasks(self, state: AgentState) -> AgentState:
         """Decompose high-level objectives into executable tasks."""
         logger.info("Decomposing high-level objectives into tasks")
+
+        # Clear existing tasks if re-decomposing
+        self.task_manager = TaskManager()
 
         # Create scope string representation
         scope_str = "Domains: " + ", ".join(self.scope_validator.domains + self.scope_validator.wildcard_domains)
@@ -237,35 +243,29 @@ class CybersecurityWorkflow:
         try:
             # Call the LLM
             raw_output = chain.invoke({})
-            
+
             # Extract content from AIMessage if needed
             if isinstance(raw_output, AIMessage):
                 raw_output = raw_output.content
-            
-            logger.debug(f"Raw LLM output: {raw_output}")
-            
+
+            logger.debug(f"Raw LLM output: {raw_output}")  # Log the raw output
+
             # Parse the JSON task list
             tasks_list = extract_json_array(raw_output) if isinstance(raw_output, str) else raw_output
-            
+
             logger.info(f"Tasks list: {tasks_list}")
-            
+
             # Add tasks to the task manager
             for task_data in tasks_list:
-                # Extract params correctly
-                params = {}
-                if "params" in task_data:
-                    params = task_data["params"]
-                elif "arguments" in task_data:
-                    params = task_data["arguments"]
-                
-                # Extract depends_on correctly
-                depends_on = []
-                if "depends_on" in task_data:
-                    depends_on = task_data["depends_on"]
-                elif "dependencies" in task_data:
-                    depends_on = task_data["dependencies"]
-                
+                logger.debug(f"Task data before extraction: {task_data}")  # Log each task data item
+                # Extract params correctly using 'params' key (fallback to 'arguments')
+                params = task_data.get("params", task_data.get("arguments", {}))
+
+                # Extract depends_on correctly (fallback to 'dependencies')
+                depends_on = task_data.get("depends_on", task_data.get("dependencies", []))
+
                 task = Task(
+                    id=task_data.get("id", None),  # Use provided ID if available
                     name=task_data.get("name", ""),
                     tool=task_data.get("tool", ""),
                     params=params,  # Use the extracted params
@@ -275,15 +275,15 @@ class CybersecurityWorkflow:
                 )
 
                 self.task_manager.add_task(task)
-            
+
             # Update state
             state.task_manager = self.task_manager.to_dict()
             logger.info(f"Created {len(tasks_list)} tasks from objectives")
-            
+
         except Exception as e:
             logger.error(f"Error decomposing tasks: {str(e)}")
             state.error_log.append(f"Error decomposing tasks: {str(e)}")
-        
+
         return state
 
     def _get_next_executable_task(self) -> Optional[Task]:
@@ -305,11 +305,11 @@ class CybersecurityWorkflow:
     def _select_next_task(self, state: AgentState) -> AgentState:
         """Select the next task to execute based on dependencies and status."""
         logger.info("Selecting next task to execute")
-        
+
         # Rebuild task manager from state if needed
         if isinstance(state.task_manager, dict):
             self.task_manager.from_dict(state.task_manager)
-        
+
         next_task = self._get_next_executable_task()
         if next_task:
             state.current_task_id = next_task.id
@@ -317,7 +317,7 @@ class CybersecurityWorkflow:
         else:
             state.current_task_id = None
             logger.info("No more tasks to execute")
-        
+
         state.task_manager = self.task_manager.to_dict()
         return state
 
@@ -326,55 +326,81 @@ class CybersecurityWorkflow:
         task_id = state.current_task_id
         if not task_id:
             return state
-        
-        # Rebuild task manager from state
+
+        # Rebuild task manager from state if needed
         if isinstance(state.task_manager, dict):
             self.task_manager.from_dict(state.task_manager)
-        
+
         task = self.task_manager.get_task(task_id)
         if not task:
             return state
-        
+
         # Mark the task as running
         task.status = TaskStatus.RUNNING
         task.started_at = self.task_manager.get_current_time()
         self.task_manager.update_task(task)
         logger.info(f"Executing task: {task.name} (ID: {task.id}) with tool: {task.tool}")
-        
+
         try:
             # Retrieve the appropriate tool instance
             tool = self.tools.get(task.tool)
             if not tool:
                 raise ValueError(f"Tool '{task.tool}' not found")
-            
-            # Remap parameter 'port_range' to 'ports' if present for nmap tasks
+
+            # Process parameters for different tools
             if task.tool == "nmap":
                 params = task.params.copy()
-                if "port_range" in params:
-                    params["ports"] = params.pop("port_range")
+
+                # Remove the 'version_detection' key if present 
+                if "version_detection" in params:
+                    params.pop("version_detection")
+
+                # Ensure we have a target
+                logger.debug(f"Executing task: {task.name} (ID: {task.id}) with params: {params}")
+                if "target" not in params or not params.get("target"):
+                    logger.error("Target parameter is missing.")
+                    raise ValueError("Target parameter is missing.")
+
+                # Handle target format (string or list)
+                if isinstance(params["target"], list):
+                    pass
+                elif "," in params["target"]:
+                    params["target"] = [t.strip() for t in params["target"].split(",")]
+
+                # Set a reasonable timeout if not specified
+                if "timeout" not in params:
+                    if params.get("scan_type") in ["comprehensive", "vulnerability"]:
+                        params["timeout"] = 600
+                    elif params.get("scan_type") in ["service", "os_detection"]:
+                        params["timeout"] = 300
+                    else:
+                        params["timeout"] = 180
+
+                # Option to run with sudo if needed
+                if "sudo" in params and isinstance(tool, NmapScanner):
+                    tool.sudo = params.pop("sudo")
+
+                logger.info(f"Executing nmap scan with parameters: {params}")
                 result = tool.scan(**params)
+
+                print(result)
+
+                # Optionally add a scan summary
+                if hasattr(tool, "get_scan_summary"):
+                    try:
+                        summary = tool.get_scan_summary(result)
+                        result["summary"] = summary
+                    except Exception as summary_err:
+                        logger.warning(f"Failed to generate scan summary: {str(summary_err)}")
             else:
                 raise ValueError(f"Unknown tool: {task.tool}")
-            
-            # Store the result and mark as completed
+
+            # Store the result and mark the task as completed
             task.result = result
             task.status = TaskStatus.COMPLETED
             task.completed_at = self.task_manager.get_current_time()
             state.results[task.id] = result
-            
-            execution_log = {
-                "timestamp": self.task_manager.get_current_time(),
-                "task_id": task.id,
-                "task_name": task.name,
-                "tool": task.tool,
-                "arguments": task.params,
-                "status": "completed",
-                "duration": (task.completed_at - task.started_at)
-                            if task.completed_at and task.started_at else None
-            }
-            state.execution_log.append(execution_log)
-            logger.info(f"Task {task.id} ({task.name}) completed successfully")
-        
+
         except Exception as e:
             error_msg = f"Error executing task {task.id} ({task.name}): {str(e)}"
             logger.error(error_msg)
@@ -385,53 +411,49 @@ class CybersecurityWorkflow:
             if not hasattr(task, 'retry_count'):
                 task.retry_count = 0
             task.retry_count += 1
-            if task.retry_count < task.max_retries:
+            max_retries = getattr(task, 'max_retries', 3)
+            if task.retry_count < max_retries:
                 task.status = TaskStatus.RETRYING
-                logger.info(f"Retrying task {task.id} ({task.name}), attempt {task.retry_count + 1}/{task.max_retries}")
-            
-            execution_log = {
-                "timestamp": self.task_manager.get_current_time(),
-                "task_id": task.id,
-                "task_name": task.name,
-                "tool": task.tool,
-                "arguments": task.params,
-                "status": "failed",
-                "error": str(e),
-                "retry_count": task.retry_count
-            }
-            state.execution_log.append(execution_log)
+                retry_delay = min(2 ** task.retry_count, 60)
+                logger.info(f"Retrying task {task.id} ({task.name}) in {retry_delay}s, attempt {task.retry_count}/{max_retries}")
+                if not hasattr(task, 'retry_info'):
+                    task.retry_info = []
+                task.retry_info.append({
+                    "attempt": task.retry_count,
+                    "timestamp": self.task_manager.get_current_time(),
+                    "error": str(e),
+                    "next_retry_delay": retry_delay
+                })
             state.error_log.append(error_msg)
-        
         finally:
             self.task_manager.update_task(task)
             state.task_manager = self.task_manager.to_dict()
-        
+
         return state
 
-    
     def _has_next_task(self, state: AgentState) -> bool:
         """Check if there's a next task to execute."""
         return state.current_task_id is not None
-    
+
     def _check_scope(self, state: AgentState) -> AgentState:
         """Check if the current task is within the defined scope."""
         task_id = state.current_task_id
         if not task_id:
             return state
-        
+
         # Rebuild task manager from state
         if isinstance(state.task_manager, dict):
             self.task_manager.from_dict(state.task_manager)
-        
+
         task = self.task_manager.get_task(task_id)
         if not task:
             return state
-        
-        # Extract target from task arguments
+
+        # Extract target from task parameters
         target = None
         if task.tool == "nmap":
             target = task.params.get("target", "")
-        
+
         if target:
             # Check if target is in scope
             is_in_scope = self.scope_validator.is_in_scope(target)
@@ -441,7 +463,7 @@ class CybersecurityWorkflow:
                 task.errors.append("Target is out of scope")
                 self.task_manager.update_task(task)
                 state.task_manager = self.task_manager.to_dict()
-                
+
                 # Log the scope violation
                 violation_log = {
                     "timestamp": self.task_manager.get_current_time(),
@@ -452,45 +474,27 @@ class CybersecurityWorkflow:
                     "message": "Target is out of scope"
                 }
                 state.execution_log.append(violation_log)
-        
+
         return state
-    
-    def _is_in_scope(self, state: AgentState) -> bool:
-        """Determine if the current task is in scope."""
-        task_id = state.current_task_id
-        if not task_id:
-            return False
-        
-        # Rebuild task manager from state
-        if isinstance(state.task_manager, dict):
-            self.task_manager.from_dict(state.task_manager)
-        
-        task = self.task_manager.get_task(task_id)
-        if not task:
-            return False
-            
-        # Check if the task was skipped due to scope issues
-        return task.status != TaskStatus.SKIPPED
 
     def _analyze_results(self, state: AgentState) -> AgentState:
         """Analyze task results and determine if new tasks should be added."""
         task_id = state.current_task_id
         if not task_id or task_id not in state.results:
             return state
-        
-        # Get the current task and its results
+
         # Rebuild task manager from state
         if isinstance(state.task_manager, dict):
             self.task_manager.from_dict(state.task_manager)
-        
+
         task = self.task_manager.get_task(task_id)
         if not task or task.status != TaskStatus.COMPLETED:
             return state
-            
+
         results = state.results.get(task_id, {})
-        
+
         logger.info(f"Analyzing results for task {task_id}")
-        
+
         # Create a summary of current tasks
         current_tasks_summary = []
         for t in self.task_manager.get_all_tasks():
@@ -501,11 +505,11 @@ class CybersecurityWorkflow:
                 "tool": t.tool,
                 "status": t.status.value
             })
-        
+
         # Create scope summary
         scope_str = "Domains: " + ", ".join(self.scope_validator.domains + self.scope_validator.wildcard_domains)
         scope_str += "\nIP Ranges: " + ", ".join(str(ip_range) for ip_range in self.scope_validator.ip_ranges)
-        
+
         # Create the prompt
         prompt = ChatPromptTemplate.from_messages([
             SystemMessage(content="You are a cybersecurity analyst."),
@@ -516,49 +520,51 @@ class CybersecurityWorkflow:
                 scope=scope_str
             ))
         ])
-        
+
         # Parse the output as JSON
         chain = prompt | self.llm | JsonOutputParser()
-        
+
         # Execute the chain
         try:
             new_tasks = chain.invoke({})
-            
+
             # Add new tasks to the task manager
             if new_tasks and len(new_tasks) > 0:
                 for task_data in new_tasks:
-                    # Use params consistently instead of switching between params/arguments
+                    # Use 'params' if available, otherwise fallback to 'arguments'
+                    params = task_data.get("params", task_data.get("arguments", {}))
+                    # Use 'depends_on' if available, otherwise fallback to 'dependencies'
+                    depends_on = task_data.get("depends_on", task_data.get("dependencies", []))
                     new_task = Task(
                         name=task_data.get("name", ""),
                         tool=task_data.get("tool", ""),
-                        params=task_data.get("arguments", {}),  # or 'params' if your incoming data uses that key
+                        params=params,
                         description=task_data.get("description", ""),
-                        depends_on=task_data.get("dependencies", [])
+                        depends_on=depends_on
                     )
-
                     self.task_manager.add_task(new_task)
-                
+
                 # Update the state
                 state.task_manager = self.task_manager.to_dict()
                 logger.info(f"Added {len(new_tasks)} new tasks based on analysis")
             else:
                 logger.info("No new tasks needed based on result analysis")
-        
+
         except Exception as e:
             error_msg = f"Error analyzing results: {str(e)}"
             logger.error(error_msg)
             state.error_log.append(error_msg)
-        
+
         return state
-    
+
     def _generate_report(self, state: AgentState) -> AgentState:
         """Generate a final security report."""
         logger.info("Generating final security report")
-        
+
         # Rebuild task manager from state
         if isinstance(state.task_manager, dict):
             self.task_manager.from_dict(state.task_manager)
-            
+
         # Collect all task results
         all_results = {}
         for task_id, result in state.results.items():
@@ -568,29 +574,38 @@ class CybersecurityWorkflow:
                     "task": task.to_dict(),
                     "result": result
                 }
-        
+
         # Create scope summary
         scope_str = "Domains: " + ", ".join(self.scope_validator.domains + self.scope_validator.wildcard_domains)
         scope_str += "\nIP Ranges: " + ", ".join(str(ip_range) for ip_range in self.scope_validator.ip_ranges)
-        
-        # Create prompt for report generation
+
+        # Create the report prompt content using the report generation prompt
+        report_prompt_content = REPORT_GENERATION_PROMPT.format(
+            objectives="\n".join(state.objectives),
+            scope=scope_str,
+            tasks=[t.to_dict() for t in self.task_manager.get_all_tasks()],
+            results=all_results
+        )
+
+        # Limit the prompt content to approximately 5000 tokens (using a rough character limit).
+        # Adjust 'max_characters' as needed (here 20,000 characters is used as an approximation).
+        max_characters = 20000
+        if len(report_prompt_content) > max_characters:
+            report_prompt_content = report_prompt_content[:max_characters] + "\n...[truncated]"
+
+        # Build the final prompt messages
         prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content="You are a cybersecurity report writer."),
-            HumanMessage(content=REPORT_GENERATION_PROMPT.format(
-                objectives="\n".join(state.objectives),
-                scope=scope_str,
-                tasks=[t.to_dict() for t in self.task_manager.get_all_tasks()],
-                results=all_results
-            ))
+            SystemMessage(content="You are a cybersecurity report writer. Please generate a report that does not exceed 5000 tokens."),
+            HumanMessage(content=report_prompt_content)
         ])
-        
-        # Generate the report
+
+        # Generate the report.
+        # If your LLM supports a max_tokens parameter, pass it to limit the output.
         chain = prompt | self.llm
-        
         try:
-            report_result = chain.invoke({})
+            report_result = chain.invoke({}, max_tokens=5000)
             report_content = report_result.content if isinstance(report_result, AIMessage) else report_result
-            
+
             # Create a report object and set it directly on the state
             report_obj = {
                 "content": report_content,
@@ -602,50 +617,48 @@ class CybersecurityWorkflow:
                     "skipped_tasks": len([t for t in self.task_manager.get_all_tasks() if t.status == TaskStatus.SKIPPED])
                 }
             }
-            
-            # Assign the report to the state - this needs to work with different state representations
+
+            # Assign the report to the state
             if hasattr(state, '__setattr__'):
-                # If state supports direct attribute assignment
                 state.__setattr__('report', report_obj)
             else:
-                # Otherwise, try dictionary-style assignment
                 state.report = report_obj
-                
+
             logger.info("Final security report generated successfully")
-        
+
         except Exception as e:
             error_msg = f"Error generating report: {str(e)}"
             logger.error(error_msg)
             state.error_log.append(error_msg)
-            
+
             report_obj = {
                 "content": "Error generating report",
                 "error": str(e),
                 "timestamp": self.task_manager.get_current_time()
             }
-            
-            # Same assignment logic as above
+
             if hasattr(state, '__setattr__'):
                 state.__setattr__('report', report_obj)
             else:
                 state.report = report_obj
-        
+
         return state
+
 
     def run(self, objectives: List[str], scope_config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Run the cybersecurity workflow.
-        
+
         Args:
             objectives: List of high-level security objectives
             scope_config: Configuration for the scope enforcer
-            
+
         Returns:
             dict: Workflow results including report
         """
         # Initialize scope enforcer
         self._setup_scope(scope_config)
-        
+
         # Initialize the state
         initial_state = AgentState(
             objectives=objectives,
@@ -656,14 +669,14 @@ class CybersecurityWorkflow:
                 "enabled": self.scope_validator.enabled
             }
         )
-        
+
         # Run the workflow
         logger.info(f"Starting cybersecurity workflow with objectives: {objectives}")
         try:
             # Compile the workflow first
             compiled_workflow = self.workflow.compile()
             final_state = compiled_workflow.invoke(initial_state)
-            
+
             # Convert the final state to a dictionary we can return
             if hasattr(final_state, 'dict'):
                 final_state_dict = final_state.dict()
@@ -674,7 +687,7 @@ class CybersecurityWorkflow:
                     "execution_log": getattr(final_state, "execution_log", []),
                     "error_log": getattr(final_state, "error_log", [])
                 }
-            
+
             return {
                 "report": final_state_dict.get("report", {}),
                 "results": final_state_dict.get("results", {}),
@@ -685,36 +698,36 @@ class CybersecurityWorkflow:
         except Exception as e:
             logger.error(f"Error running workflow: {str(e)}")
             raise RuntimeError(f"Workflow execution failed: {str(e)}")
-        
+
     def _setup_scope(self, scope_config: Dict[str, Any]) -> None:
         """
         Set up the scope enforcer from configuration.
-        
+
         Args:
             scope_config: Configuration for the scope enforcer
         """
         # Reset the scope enforcer
         self.scope_validator = ScopeValidator()
-        
+
         # Add domains
         for domain in scope_config.get("domains", []):
             self.scope_validator.add_domain(domain)
-        
+
         # Add wildcard domains
         for wildcard in scope_config.get("wildcard_domains", []):
             self.scope_validator.add_wildcard_domain(wildcard)
-        
+
         # Add IP ranges
         for ip_range in scope_config.get("ip_ranges", []):
             self.scope_validator.add_ip_range(ip_range)
-        
+
         # Add individual IPs
         for ip in scope_config.get("ips", []):
             self.scope_validator.add_ip(ip)
-        
+
         # Set enabled status
         self.scope_validator.enabled = scope_config.get("enabled", True)
-        
+
         logger.info(f"Scope enforcer configured with {len(self.scope_validator.domains)} domains, "
-                   f"{len(self.scope_validator.wildcard_domains)} wildcard domains, and "
-                   f"{len(self.scope_validator.ip_ranges)} IP ranges")
+                    f"{len(self.scope_validator.wildcard_domains)} wildcard domains, and "
+                    f"{len(self.scope_validator.ip_ranges)} IP ranges")
