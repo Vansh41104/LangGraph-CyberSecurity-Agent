@@ -1,116 +1,216 @@
-"""
-Main entry point for the Agentic Cybersecurity Pipeline.
-"""
-
+#!/usr/bin/env python3
 import os
+import sys
 import argparse
 import logging
+from datetime import datetime
 import json
-from dotenv import load_dotenv
-from typing import Dict, List, Any
 
-from utils.logger import setup_logger
+# Import the components of the system
+from utils.task_manager import TaskManager
+from utils.scope import ScopeValidator
 from langgraph.workflow import CybersecurityWorkflow
 
-# Load environment variables
-load_dotenv()
+# Set up logging
+from utils.logger import setup_logger
+logger = setup_logger()
 
 def parse_args():
-    """Parse command line arguments."""
+    """Parse command line arguments"""
     parser = argparse.ArgumentParser(description="Agentic Cybersecurity Pipeline")
     
-    # Core arguments
-    parser.add_argument("--objective", type=str, required=True,
-                        help="High-level security objective (e.g., 'Scan example.com for open ports and directories')")
+    # Define command line arguments
+    parser.add_argument("-t", "--task", required=True, help="Security task description (e.g., 'Scan example.com for open ports')")
+    parser.add_argument("-d", "--domains", nargs="+", default=[], help="Target domains (e.g., example.com *.example.org)")
+    parser.add_argument("-i", "--ip-ranges", nargs="+", default=[], help="Target IP ranges (e.g., 192.168.1.0/24 10.0.0.1)")
+    parser.add_argument("-o", "--output", help="Output file for the report (default: report_YYYYMMDD_HHMMSS.json)")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("--stream", action="store_true", help="Stream task output to console")
+    parser.add_argument("--streamlit", action="store_true", help="Launch the Streamlit UI")
     
-    # Scope configuration
-    parser.add_argument("--domains", type=str, nargs="+", default=[],
-                        help="List of domains to include in scope")
-    parser.add_argument("--wildcard-domains", type=str, nargs="+", default=[],
-                        help="List of wildcard domains to include in scope (e.g., '.example.com')")
-    parser.add_argument("--ip-ranges", type=str, nargs="+", default=[],
-                        help="List of IP ranges to include in scope (CIDR notation)")
-    parser.add_argument("--ips", type=str, nargs="+", default=[],
-                        help="List of individual IP addresses to include in scope")
-    
-    # Configuration options
-    parser.add_argument("--disable-scope", action="store_true",
-                        help="Disable scope enforcement (not recommended for production)")
-    parser.add_argument("--config", type=str,
-                        help="Path to configuration file (JSON)")
-    parser.add_argument("--output", type=str, default="report.md",
-                        help="Path to output report file")
-    parser.add_argument("--log-level", type=str, default="INFO",
-                        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-                        help="Set the logging level")
-    
-    # Parse arguments
     return parser.parse_args()
 
-def load_config(config_path: str) -> Dict[str, Any]:
-    """Load configuration from a JSON file."""
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Configuration file not found: {config_path}")
+def validate_inputs(args):
+    """Validate command line inputs"""
+    if not args.domains and not args.ip_ranges:
+        logger.error("At least one domain or IP range must be specified")
+        return False
     
-    with open(config_path, "r") as f:
-        return json.load(f)
+    return True
+
+def run_workflow(security_task, domains, ip_ranges, stream=False):
+    """Run the cybersecurity workflow with given inputs"""
+    try:
+        logger.info(f"Starting cybersecurity pipeline with task: {security_task}")
+        logger.info(f"Target scope: domains={domains}, ip_ranges={ip_ranges}")
+        
+        # Initialize the components
+        scope_validator = ScopeValidator(domains, ip_ranges)
+        task_manager = TaskManager()
+        
+        # Initialize the workflow
+        workflow = CybersecurityWorkflow(
+            task_manager=task_manager,
+            scope_validator=scope_validator
+        )
+        
+        # Start the workflow
+        workflow.start(security_task, stream=stream)
+        
+        # Generate and return the report
+        return generate_report(task_manager)
+        
+    except Exception as e:
+        logger.error(f"Error running workflow: {str(e)}")
+        return None
+
+def generate_report(task_manager):
+    """Generate a final report based on task execution"""
+    tasks = task_manager.get_all_tasks()
+    
+    # Generate report with all task information
+    report = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "summary": {
+            "total_tasks": len(tasks),
+            "completed_tasks": sum(1 for t in tasks if t.status.name == "COMPLETED"),
+            "failed_tasks": sum(1 for t in tasks if t.status.name == "FAILED"),
+            "pending_tasks": sum(1 for t in tasks if t.status.name == "PENDING"),
+            "running_tasks": sum(1 for t in tasks if t.status.name == "RUNNING"),
+        },
+        "vulnerabilities": [],
+        "tasks": []
+    }
+    
+    # Add task details
+    for task in tasks:
+        task_details = {
+            "id": task.id,
+            "description": task.description,
+            "status": task.status.name,
+            "created_at": task.created_at.strftime("%Y-%m-%d %H:%M:%S") if task.created_at else None,
+            "started_at": task.started_at.strftime("%Y-%m-%d %H:%M:%S") if task.started_at else None,
+            "completed_at": task.completed_at.strftime("%Y-%m-%d %H:%M:%S") if task.completed_at else None,
+            "attempts": task.attempts,
+            "result": task.result,
+            "error": task.error_message
+        }
+        report["tasks"].append(task_details)
+        
+        # Check for vulnerabilities in task results
+        if task.status.name == "COMPLETED" and task.result:
+            # Parse the result for vulnerability information
+            try:
+                # This is a simplified example - you would need to parse actual tool outputs
+                if 'vulnerability' in str(task.result).lower() or 'open port' in str(task.result).lower():
+                    report["vulnerabilities"].append({
+                        "task_id": task.id,
+                        "description": task.description,
+                        "details": str(task.result)
+                    })
+            except Exception:
+                pass
+    
+    return report
+
+def save_report(report, output_file=None):
+    """Save the report to a file"""
+    if not output_file:
+        output_file = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    
+    try:
+        with open(output_file, 'w') as f:
+            json.dump(report, f, indent=2)
+        logger.info(f"Report saved to {output_file}")
+        return True
+    except Exception as e:
+        logger.error(f"Error saving report: {str(e)}")
+        return False
+
+def launch_streamlit():
+    """Launch the Streamlit UI"""
+    try:
+        import subprocess
+        streamlit_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "streamlit_app", "app.py")
+        logger.info(f"Launching Streamlit UI from {streamlit_path}")
+        subprocess.run(["streamlit", "run", streamlit_path])
+    except Exception as e:
+        logger.error(f"Error launching Streamlit UI: {str(e)}")
+        print(f"Error: {str(e)}")
+        print("To launch Streamlit manually, run: streamlit run streamlit_app/app.py")
+
+def print_example_commands():
+    """Print example commands for reference"""
+    print("\nExample commands:")
+    print("-----------------")
+    print("1. Scan a single domain for open ports:")
+    print("   python main.py -t \"Scan for open ports\" -d example.com")
+    print()
+    print("2. Scan multiple domains with directory discovery:")
+    print("   python main.py -t \"Scan for open ports and discover directories\" -d example.com test.org -v")
+    print()
+    print("3. Scan an IP range for vulnerabilities:")
+    print("   python main.py -t \"Find vulnerabilities in the internal network\" -i 192.168.1.0/24 -o network_scan.json")
+    print()
+    print("4. Launch the Streamlit UI:")
+    print("   python main.py --streamlit")
+    print()
 
 def main():
-    """Main entry point."""
+    """Main entry point for the cybersecurity pipeline"""
     # Parse command line arguments
     args = parse_args()
     
-    # Setup logging
-    setup_logger(log_level=args.log_level)
-    logger = logging.getLogger(__name__)
+    # Set logging level
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
     
-    # Load configuration from file if provided
-    config = {}
-    if args.config and os.path.exists(args.config):
-        logger.info(f"Loading configuration from {args.config}")
-        config = load_config(args.config)
+    # Launch Streamlit UI if requested
+    if args.streamlit:
+        launch_streamlit()
+        return
     
-    # Override configuration with command line arguments
-    objectives = [args.objective]
-    if "objectives" in config:
-        objectives = config.get("objectives", [])
-        if args.objective and args.objective not in objectives:
-            objectives.append(args.objective)
+    # Validate inputs
+    if not validate_inputs(args):
+        print("Invalid inputs. Please check command line arguments.")
+        print_example_commands()
+        return
     
-    # Setup scope configuration
-    scope_config = config.get("scope", {})
-    if args.domains:
-        scope_config["domains"] = args.domains
-    if args.wildcard_domains:
-        scope_config["wildcard_domains"] = args.wildcard_domains
-    if args.ip_ranges:
-        scope_config["ip_ranges"] = args.ip_ranges
-    if args.ips:
-        scope_config["ips"] = args.ips
-    if args.disable_scope:
-        scope_config["enabled"] = False
+    # Run the workflow
+    report = run_workflow(
+        security_task=args.task,
+        domains=args.domains,
+        ip_ranges=args.ip_ranges,
+        stream=args.stream
+    )
     
-    # Print summary of configuration
-    logger.info(f"Objectives: {objectives}")
-    logger.info(f"Scope configuration: {scope_config}")
-    
-    # Initialize and run the workflow
-    workflow = CybersecurityWorkflow()
-    results = workflow.run(objectives=objectives, scope_config=scope_config)
-    
-    # Save the report
-    with open(args.output, "w") as f:
-        f.write(results["report"]["content"])
-    
-    logger.info(f"Report saved to {args.output}")
-    
-    # Print summary
-    print(f"\nSecurity audit completed!")
-    print(f"Total tasks: {results['report']['execution_summary']['total_tasks']}")
-    print(f"Completed tasks: {results['report']['execution_summary']['completed_tasks']}")
-    print(f"Failed tasks: {results['report']['execution_summary']['failed_tasks']}")
-    print(f"Skipped tasks: {results['report']['execution_summary']['skipped_tasks']}")
-    print(f"Report saved to: {args.output}")
+    # Save the report if workflow was successful
+    if report:
+        save_report(report, args.output)
+        
+        # Print summary to console
+        print("\nExecution Summary:")
+        print("-----------------")
+        print(f"Total Tasks: {report['summary']['total_tasks']}")
+        print(f"Completed Tasks: {report['summary']['completed_tasks']}")
+        print(f"Failed Tasks: {report['summary']['failed_tasks']}")
+        print(f"Vulnerabilities Found: {len(report['vulnerabilities'])}")
+        
+        if report['vulnerabilities']:
+            print("\nVulnerabilities Found:")
+            print("----------------------")
+            for i, vuln in enumerate(report['vulnerabilities']):
+                print(f"{i+1}. {vuln['description']} (Task ID: {vuln['task_id']})")
+    else:
+        print("Workflow execution failed. Check logs for details.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nExecution interrupted by user.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        logger.exception("Unexpected error occurred")
+        sys.exit(1)

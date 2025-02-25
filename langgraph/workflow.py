@@ -44,7 +44,7 @@ class AgentState(BaseModel):
     report: Dict[str, Any] = Field(default_factory=dict, description="Final report")
 
 # Initialize the LLM
-def get_llm(model="gpt-4-turbo", temperature=0):
+def get_llm(model="GPT-4o mini", temperature=0):
     return ChatOpenAI(model=model, temperature=temperature)
 
 # Task decomposition prompt
