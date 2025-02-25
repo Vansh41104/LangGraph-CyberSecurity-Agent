@@ -39,7 +39,7 @@ class AgentState(BaseModel):
     report: Dict[str, Any] = Field(default_factory=dict, description="Final report")
 
 # Initialize the LLM
-def get_llm(model="llama-3.3-70b-versatile", temperature=0):
+def get_llm(model="gemma2-9b-it", temperature=0):
     return ChatGroq(model=model, temperature=temperature)
 
 # Task decomposition prompt - Updated for proper parameter formatting
@@ -96,22 +96,32 @@ For each new task, provide:
 
 # Report generation prompt - Focused on key details
 REPORT_GENERATION_PROMPT = '''
-You are an expert cybersecurity analyst. Create a comprehensive security report based on the executed scans.
+You are an expert cybersecurity analyst. Below are the results of network scans including detailed outputs from nmap.
+Use this data to create a comprehensive cybersecurity report that includes:
 
-OBJECTIVES: {objectives}
-TARGET SCOPE: {scope}
-EXECUTED TASKS: {tasks}
-SCAN RESULTS: {results}
+- Executive Summary
+- Methodology
+- Detailed Findings (open ports, vulnerabilities, etc.)
+- Recommendations
+- Technical Details
 
-Include:
-1. Executive Summary
-2. Methodology
-3. Findings and Vulnerabilities (with severity ratings)
-4. Recommendations
-5. Technical Details
+Present the report in Markdown.
 
-Format your report in Markdown.
+OBJECTIVES:
+{objectives}
+
+TARGET SCOPE:
+{scope}
+
+EXECUTED TASKS (JSON format):
+{tasks}
+
+SCAN RESULTS:
+{raw_results}
 '''
+
+
+
 
 def extract_json_array(text: str) -> List[Dict[str, Any]]:
     """
@@ -377,33 +387,36 @@ class CybersecurityWorkflow:
                         params["timeout"] = 180
 
                 # For any port scanning task (non-ping), force the ports to be "1-10000"
+                # and ensure that only open ports are shown by adding the "--open" flag.
                 if params.get("scan_type", "").lower() != "ping":
                     params["ports"] = "1-10000"
+                    if "arguments" in params:
+                        if "--open" not in params["arguments"]:
+                            params["arguments"] += " --open"
+                    else:
+                        params["arguments"] = "-sV -sC --open"
 
                 # Option to run with sudo if needed
                 if "sudo" in params and isinstance(tool, NmapScanner):
                     tool.sudo = params.pop("sudo")
 
                 logger.info(f"Executing nmap scan with parameters: {params}")
+                # Inside _execute_task (already present)
                 result = tool.scan(**params)
-
                 print(result)
-
-                # Optionally add a scan summary
+                # Optionally add a summary if available:
                 if hasattr(tool, "get_scan_summary"):
                     try:
                         summary = tool.get_scan_summary(result)
                         result["summary"] = summary
                     except Exception as summary_err:
                         logger.warning(f"Failed to generate scan summary: {str(summary_err)}")
-            else:
-                raise ValueError(f"Unknown tool: {task.tool}")
 
-            # Store the result and mark the task as completed
-            task.result = result
-            task.status = TaskStatus.COMPLETED
-            task.completed_at = self.task_manager.get_current_time()
-            state.results[task.id] = result
+                # Store the result
+                task.result = result
+                task.status = TaskStatus.COMPLETED
+                state.results[task.id] = result
+
 
         except Exception as e:
             error_msg = f"Error executing task {task.id} ({task.name}): {str(e)}"
@@ -434,6 +447,7 @@ class CybersecurityWorkflow:
             state.task_manager = self.task_manager.to_dict()
 
         return state
+
 
     def _has_next_task(self, state: AgentState) -> bool:
         """Check if there's a next task to execute."""
@@ -562,15 +576,15 @@ class CybersecurityWorkflow:
         return state
 
     def _generate_report(self, state: AgentState) -> AgentState:
-        """Generate a final security report."""
         logger.info("Generating final security report")
 
-        # Rebuild task manager from state
+        # Rebuild task manager from state if needed
         if isinstance(state.task_manager, dict):
             self.task_manager.from_dict(state.task_manager)
 
-        # Collect all task results
+        # Collect all task results and build a raw results string
         all_results = {}
+        raw_results = ""
         for task_id, result in state.results.items():
             task = self.task_manager.get_task(task_id)
             if task:
@@ -578,39 +592,47 @@ class CybersecurityWorkflow:
                     "task": task.to_dict(),
                     "result": result
                 }
+                # Build a string that includes command, summary, and full output
+                raw_results += f"Task {task.name} (ID: {task_id}):\n"
+                raw_results += f"Executed Command: {result.get('command', 'N/A')}\n"
+                if result.get("summary"):
+                    raw_results += f"Scan Summary: {result.get('summary')}\n"
+                raw_results += f"Full Output:\n{result.get('stdout', '')}\n\n"
 
         # Create scope summary
         scope_str = "Domains: " + ", ".join(self.scope_validator.domains + self.scope_validator.wildcard_domains)
         scope_str += "\nIP Ranges: " + ", ".join(str(ip_range) for ip_range in self.scope_validator.ip_ranges)
 
-        # Create the report prompt content using the report generation prompt
+        # Create the report prompt content using the updated prompt template
         report_prompt_content = REPORT_GENERATION_PROMPT.format(
             objectives="\n".join(state.objectives),
             scope=scope_str,
             tasks=[t.to_dict() for t in self.task_manager.get_all_tasks()],
-            results=all_results
+            raw_results=raw_results
         )
 
-        # Limit the prompt content to approximately 5000 tokens (using a rough character limit).
-        # Adjust 'max_characters' as needed (here 20,000 characters is used as an approximation).
+        # Optional: Truncate prompt if needed
         max_characters = 20000
         if len(report_prompt_content) > max_characters:
             report_prompt_content = report_prompt_content[:max_characters] + "\n...[truncated]"
+            logger.info("Report prompt content truncated to 20,000 characters.")
 
-        # Build the final prompt messages
         prompt = ChatPromptTemplate.from_messages([
             SystemMessage(content="You are a cybersecurity report writer. Please generate a report that does not exceed 5000 tokens."),
             HumanMessage(content=report_prompt_content)
         ])
 
-        # Generate the report.
-        # If your LLM supports a max_tokens parameter, pass it to limit the output.
+        logger.debug(f"Final report prompt content: {report_prompt_content[:1000]} ...")
+
         chain = prompt | self.llm
         try:
-            report_result = chain.invoke({}, max_tokens=5000)
+            report_result = chain.invoke({}, max_tokens=7000)
             report_content = report_result.content if isinstance(report_result, AIMessage) else report_result
 
-            # Create a report object and set it directly on the state
+            if not report_content or not report_content.strip():
+                report_content = "Report generation failed: The LLM returned empty content. Please check the prompt and try again."
+                logger.warning("LLM returned empty report content.")
+
             report_obj = {
                 "content": report_content,
                 "timestamp": self.task_manager.get_current_time(),
@@ -622,31 +644,22 @@ class CybersecurityWorkflow:
                 }
             }
 
-            # Assign the report to the state
-            if hasattr(state, '__setattr__'):
-                state.__setattr__('report', report_obj)
-            else:
-                state.report = report_obj
-
+            state.report = report_obj
             logger.info("Final security report generated successfully")
-
         except Exception as e:
             error_msg = f"Error generating report: {str(e)}"
             logger.error(error_msg)
             state.error_log.append(error_msg)
-
-            report_obj = {
+            state.report = {
                 "content": "Error generating report",
                 "error": str(e),
                 "timestamp": self.task_manager.get_current_time()
             }
 
-            if hasattr(state, '__setattr__'):
-                state.__setattr__('report', report_obj)
-            else:
-                state.report = report_obj
-
         return state
+
+
+
 
     def run(self, objectives: List[str], scope_config: Dict[str, Any]) -> Dict[str, Any]:
         """
