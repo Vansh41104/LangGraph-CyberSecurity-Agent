@@ -169,3 +169,16 @@ class ScopeValidator:
             logger.warning(f"Target '{target}' is out of scope for task: {task.get('name', 'unnamed')}")
             return False
         return True
+        
+    def is_in_scope(self, target: str) -> bool:
+        """
+        Check if a target is within the allowed scope.
+        This is an alias for is_target_in_scope.
+        
+        Args:
+            target (str): A domain name or IP address.
+        
+        Returns:
+            bool: True if the target is within scope, False otherwise.
+        """
+        return self.is_target_in_scope(target)

@@ -3,6 +3,8 @@ from typing import List, Dict, Any, Optional, Callable
 import time
 import logging
 from datetime import datetime
+import uuid
+
 
 class TaskStatus(Enum):
     PENDING = "pending"
@@ -10,6 +12,7 @@ class TaskStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+    RETRYING = "retrying"
 
 
 class Task:
@@ -31,9 +34,12 @@ class Task:
         self.status = TaskStatus.PENDING
         self.retry_count = 0
         self.errors = []  # Initialize empty errors list
+        self.error = None  # Initialize error attribute
+        self.logs = []  # Initialize logs attribute
         self.result = None
         self.started_at = None
         self.completed_at = None
+        self.created_at = datetime.now()  # Initialize created_at attribute
 
     def update_status(self, status: TaskStatus, result: Any = None, error: Any = None):
         self.status = status

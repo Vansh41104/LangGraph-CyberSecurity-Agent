@@ -41,17 +41,18 @@ if 'scan_history' not in st.session_state:
 def start_workflow(security_task, domains, ip_ranges):
     """Start the cybersecurity workflow with defined scope"""
     try:
-        # Initialize scope validator
-        st.session_state.scope_validator = ScopeValidator(domains, ip_ranges)
+        # Initialize scope validator and add domains/IP ranges
+        st.session_state.scope_validator = ScopeValidator()
+        for domain in domains:
+            st.session_state.scope_validator.add_domain(domain)
+        for ip in ip_ranges:
+            st.session_state.scope_validator.add_ip_range(ip)
         
         # Initialize task manager
         st.session_state.task_manager = TaskManager()
         
-        # Initialize workflow
-        st.session_state.workflow = CybersecurityWorkflow(
-            task_manager=st.session_state.task_manager,
-            scope_validator=st.session_state.scope_validator
-        )
+        # Initialize workflow (which will use the internal task manager and scope validator)
+        st.session_state.workflow = CybersecurityWorkflow()
         
         # Reset logs and state
         st.session_state.logs = []
@@ -67,18 +68,32 @@ def start_workflow(security_task, domains, ip_ranges):
         }
         st.session_state.logs.append(log_entry)
         
-        # Start the workflow with the security task
-        st.session_state.workflow.start(security_task)
+        # Run the workflow (the run method returns a dict with keys "report", "results", etc.)
+        result = st.session_state.workflow.run(
+            [security_task],
+            {
+                "domains": domains,
+                "ip_ranges": ip_ranges,
+                "wildcard_domains": []  # Adjust if needed
+            }
+        )
         
-        # Add entry to scan history
+        # Save final report from the workflow run
+        st.session_state.final_report = result.get("report", {})
+        
+        # Add entry to scan history and mark it as completed
         history_entry = {
             "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "task": security_task,
             "domains": domains,
             "ip_ranges": ip_ranges,
-            "status": "Running"
+            "status": "Completed",
+            "end_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "vulnerabilities": len(st.session_state.final_report.get("vulnerabilities", []))
         }
         st.session_state.scan_history.append(history_entry)
+        
+        st.session_state.is_running = False
         
     except Exception as e:
         st.error(f"Error starting workflow: {str(e)}")
@@ -128,6 +143,9 @@ def generate_report():
         
         # Add task details
         for task in tasks:
+            error_str = ""
+            if hasattr(task, "errors") and task.errors:
+                error_str = ", ".join(task.errors)
             task_details = {
                 "id": task.id,
                 "description": task.description,
@@ -135,18 +153,17 @@ def generate_report():
                 "created_at": task.created_at.strftime("%Y-%m-%d %H:%M:%S") if task.created_at else None,
                 "started_at": task.started_at.strftime("%Y-%m-%d %H:%M:%S") if task.started_at else None,
                 "completed_at": task.completed_at.strftime("%Y-%m-%d %H:%M:%S") if task.completed_at else None,
-                "attempts": task.attempts,
+                "attempts": getattr(task, "retry_count", 0),
                 "result": task.result,
-                "error": task.error_message
+                "error": error_str
             }
             report["tasks"].append(task_details)
             
-            # Check for vulnerabilities in task results
+            # Check for vulnerabilities in task results (simple heuristic)
             if task.status == TaskStatus.COMPLETED and task.result:
-                # Parse the result for vulnerability information
                 try:
-                    # This is a simplified example - you would need to parse actual tool outputs
-                    if 'vulnerability' in str(task.result).lower() or 'open port' in str(task.result).lower():
+                    result_str = str(task.result).lower()
+                    if "vulnerability" in result_str or "open port" in result_str:
                         report["vulnerabilities"].append({
                             "task_id": task.id,
                             "description": task.description,
@@ -161,7 +178,6 @@ def generate_report():
             st.session_state.scan_history[-1]["end_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             st.session_state.scan_history[-1]["vulnerabilities"] = len(report["vulnerabilities"])
         
-        # Store the report
         st.session_state.final_report = report
         return report
     return None
@@ -193,7 +209,7 @@ with st.sidebar:
     # Security Task Definition
     st.subheader("Security Task")
     security_task = st.text_area("Describe the security task", 
-                                placeholder="e.g., Scan example.com for open ports and discover directories")
+                                 placeholder="e.g., Scan example.com for open ports and discover directories")
     
     # Control Buttons
     st.subheader("Controls")
@@ -284,8 +300,8 @@ with tab1:
     else:
         st.info("No scope defined. Configure and start a scan to define the scope.")
     
-    # Live task monitoring
-    if st.session_state.is_running and st.session_state.task_manager:
+    # Live task monitoring (if available)
+    if st.session_state.task_manager:
         st.subheader("Live Task Monitoring")
         
         tasks = st.session_state.task_manager.get_all_tasks()
@@ -297,7 +313,7 @@ with tab1:
                 for task in running_tasks:
                     st.info(f"**Task:** {task.description}")
                     st.write(f"**Started at:** {task.started_at.strftime('%Y-%m-%d %H:%M:%S') if task.started_at else 'N/A'}")
-                    st.write(f"**Attempts:** {task.attempts}")
+                    st.write(f"**Attempts:** {getattr(task, 'retry_count', 0)}")
         
         # Visualize task completion using a progress chart
         statuses = [t.status.name for t in tasks]
@@ -334,7 +350,7 @@ with tab2:
                 for task in running_tasks:
                     st.info(f"**Task {task.id}:** {task.description}")
                     st.write(f"**Started at:** {task.started_at.strftime('%Y-%m-%d %H:%M:%S') if task.started_at else 'N/A'}")
-                    st.write(f"**Attempts:** {task.attempts}")
+                    st.write(f"**Attempts:** {getattr(task, 'retry_count', 0)}")
         
         if pending_tasks:
             with st.expander("Pending Tasks", expanded=True):
@@ -355,8 +371,9 @@ with tab2:
             with st.expander("Failed Tasks", expanded=False):
                 for task in failed_tasks:
                     st.error(f"**Task {task.id}:** {task.description}")
-                    st.write(f"**Attempts:** {task.attempts}")
-                    st.write(f"**Error:** {task.error_message}")
+                    st.write(f"**Attempts:** {getattr(task, 'retry_count', 0)}")
+                    error_msg = ", ".join(task.errors) if hasattr(task, "errors") and task.errors else ""
+                    st.write(f"**Error:** {error_msg}")
     else:
         st.info("No tasks available. Start a scan to generate tasks.")
 
@@ -371,7 +388,6 @@ with tab3:
     
     # Display logs with filter
     if st.session_state.logs:
-        # Reverse logs to show most recent first and apply filter
         filtered_logs = [log for log in reversed(st.session_state.logs) 
                          if log["level"] in log_level_filter]
         
@@ -391,9 +407,8 @@ with tab3:
     else:
         st.info("No logs available. Start a scan to generate logs.")
     
-    # Auto-refresh button for logs
     if st.button("Refresh Logs"):
-        st.rerun()
+        st.experimental_rerun()
 
 # Report Tab
 with tab4:
@@ -432,7 +447,7 @@ with tab4:
         task_df = pd.DataFrame([
             {
                 "ID": t["id"],
-                "Description": t["description"][:50] + "..." if len(t["description"]) > 50 else t["description"],
+                "Description": (t["description"][:50] + "...") if len(t["description"]) > 50 else t["description"],
                 "Status": t["status"],
                 "Attempts": t["attempts"],
                 "Completed At": t["completed_at"] if t["completed_at"] else "N/A"
@@ -446,7 +461,6 @@ with tab4:
         col1, col2 = st.columns(2)
         with col1:
             if st.button("Export as JSON"):
-                # Convert report to JSON
                 report_json = json.dumps(report, indent=2)
                 st.download_button(
                     label="Download JSON",
@@ -457,7 +471,6 @@ with tab4:
         
         with col2:
             if st.button("Export as Markdown"):
-                # Generate markdown report
                 markdown_report = f"""# Security Audit Report
 Generated: {report['timestamp']}
 
@@ -470,21 +483,17 @@ Generated: {report['timestamp']}
 
 ## Vulnerabilities Found: {len(report['vulnerabilities'])}
 """
-                # Add vulnerabilities
                 if report["vulnerabilities"]:
                     for i, vuln in enumerate(report["vulnerabilities"]):
                         markdown_report += f"""
 ### Vulnerability #{i+1}: {vuln['description']}
 - Task ID: {vuln['task_id']}
 - Details:
-```
 {vuln['details']}
-```
 """
                 else:
                     markdown_report += "\nNo vulnerabilities detected in this scan.\n"
                 
-                # Add task details
                 markdown_report += "\n## Task Execution Details\n"
                 for task in report["tasks"]:
                     markdown_report += f"""
@@ -497,18 +506,13 @@ Generated: {report['timestamp']}
                     if task['result']:
                         markdown_report += f"""
 - Result:
-```
 {task['result']}
-```
 """
                     if task['error']:
                         markdown_report += f"""
 - Error:
-```
 {task['error']}
-```
 """
-                
                 st.download_button(
                     label="Download Markdown",
                     data=markdown_report,

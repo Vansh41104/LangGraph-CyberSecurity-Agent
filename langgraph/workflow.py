@@ -156,6 +156,7 @@ class CybersecurityWorkflow:
             "gobuster": GoBusterScanner(),
             "ffuf": FFUFScanner()
         }
+
         
         # Create the workflow graph
         self.workflow = self._build_workflow()
@@ -292,6 +293,22 @@ class CybersecurityWorkflow:
         
         return state
 
+    def _get_next_executable_task(self) -> Optional[Task]:
+        """
+        Returns the next pending task whose dependencies are all completed.
+        """
+        for task in self.task_manager.get_all_tasks():
+            if task.status == TaskStatus.PENDING:
+                deps_satisfied = True
+                for dep_id in task.depends_on:
+                    dep_task = self.task_manager.get_task(dep_id)
+                    if not dep_task or dep_task.status != TaskStatus.COMPLETED:
+                        deps_satisfied = False
+                        break
+                if deps_satisfied:
+                    return task
+        return None
+
     def _select_next_task(self, state: AgentState) -> AgentState:
         """Select the next task to execute based on dependencies and status."""
         logger.info("Selecting next task to execute")
@@ -300,9 +317,7 @@ class CybersecurityWorkflow:
         if isinstance(state.task_manager, dict):
             self.task_manager.from_dict(state.task_manager)
         
-        # Get the next executable task
-        next_task = self.task_manager.get_next_executable_task()
-        
+        next_task = self._get_next_executable_task()
         if next_task:
             state.current_task_id = next_task.id
             logger.info(f"Selected task: {next_task.name} (ID: {next_task.id})")
@@ -310,10 +325,100 @@ class CybersecurityWorkflow:
             state.current_task_id = None
             logger.info("No more tasks to execute")
         
-        # Update task manager in state
         state.task_manager = self.task_manager.to_dict()
+        return state
+
+    def _execute_task(self, state: AgentState) -> AgentState:
+        """Execute the current task using the appropriate tool."""
+        task_id = state.current_task_id
+        if not task_id:
+            return state
+        
+        # Rebuild task manager from state
+        if isinstance(state.task_manager, dict):
+            self.task_manager.from_dict(state.task_manager)
+        
+        task = self.task_manager.get_task(task_id)
+        if not task:
+            return state
+        
+        # Mark the task as running
+        task.status = TaskStatus.RUNNING
+        task.started_at = self.task_manager.get_current_time()
+        self.task_manager.update_task(task)
+        logger.info(f"Executing task: {task.name} (ID: {task.id}) with tool: {task.tool}")
+        
+        try:
+            # Retrieve the appropriate tool instance
+            tool = self.tools.get(task.tool)
+            if not tool:
+                raise ValueError(f"Tool '{task.tool}' not found")
+            
+            # Remap parameter 'port_range' to 'ports' if present for nmap tasks
+            if task.tool == "nmap":
+                params = task.params.copy()
+                if "port_range" in params:
+                    params["ports"] = params.pop("port_range")
+                result = tool.scan(**params)
+            elif task.tool == "gobuster":
+                result = tool.scan(**task.params)
+            elif task.tool == "ffuf":
+                result = tool.fuzz(**task.params)
+            else:
+                raise ValueError(f"Unknown tool: {task.tool}")
+            
+            # Store the result and mark as completed
+            task.result = result
+            task.status = TaskStatus.COMPLETED
+            task.completed_at = self.task_manager.get_current_time()
+            state.results[task.id] = result
+            
+            execution_log = {
+                "timestamp": self.task_manager.get_current_time(),
+                "task_id": task.id,
+                "task_name": task.name,
+                "tool": task.tool,
+                "arguments": task.params,
+                "status": "completed",
+                "duration": (task.completed_at - task.started_at)
+                            if task.completed_at and task.started_at else None
+            }
+            state.execution_log.append(execution_log)
+            logger.info(f"Task {task.id} ({task.name}) completed successfully")
+        
+        except Exception as e:
+            error_msg = f"Error executing task {task.id} ({task.name}): {str(e)}"
+            logger.error(error_msg)
+            task.status = TaskStatus.FAILED
+            if not hasattr(task, 'errors'):
+                task.errors = []
+            task.errors.append(error_msg)
+            if not hasattr(task, 'retry_count'):
+                task.retry_count = 0
+            task.retry_count += 1
+            if task.retry_count < task.max_retries:
+                task.status = TaskStatus.RETRYING
+                logger.info(f"Retrying task {task.id} ({task.name}), attempt {task.retry_count + 1}/{task.max_retries}")
+            
+            execution_log = {
+                "timestamp": self.task_manager.get_current_time(),
+                "task_id": task.id,
+                "task_name": task.name,
+                "tool": task.tool,
+                "arguments": task.params,
+                "status": "failed",
+                "error": str(e),
+                "retry_count": task.retry_count
+            }
+            state.execution_log.append(execution_log)
+            state.error_log.append(error_msg)
+        
+        finally:
+            self.task_manager.update_task(task)
+            state.task_manager = self.task_manager.to_dict()
         
         return state
+
     
     def _has_next_task(self, state: AgentState) -> bool:
         """Check if there's a next task to execute."""
@@ -381,111 +486,6 @@ class CybersecurityWorkflow:
             
         # Check if the task was skipped due to scope issues
         return task.status != TaskStatus.SKIPPED
-    
-    def _execute_task(self, state: AgentState) -> AgentState:
-        """Execute the current task using the appropriate tool."""
-        task_id = state.current_task_id
-        if not task_id:
-            return state
-        
-        # Rebuild task manager from state
-        if isinstance(state.task_manager, dict):
-            self.task_manager.from_dict(state.task_manager)
-        
-        task = self.task_manager.get_task(task_id)
-        if not task:
-            return state
-        
-        # Mark the task as running
-        task.status = TaskStatus.RUNNING
-        task.started_at = self.task_manager.get_current_time()
-        self.task_manager.update_task(task)
-        
-        logger.info(f"Executing task: {task.name} (ID: {task.id}) with tool: {task.tool}")
-        
-        try:
-            # Get the appropriate tool
-            tool = self.tools.get(task.tool)
-            if not tool:
-                raise ValueError(f"Tool '{task.tool}' not found")
-            
-            # Execute the tool with the task parameters
-            result = None
-            if task.tool == "nmap":
-                result = tool.scan(**task.params)  # Changed from arguments to params
-            elif task.tool == "gobuster":
-                result = tool.scan(**task.params)  # Changed from arguments to params
-            elif task.tool == "ffuf":
-                result = tool.fuzz(**task.params)  # Changed from arguments to params
-            else:
-                raise ValueError(f"Unknown tool: {task.tool}")
-            
-            # Store the result
-            task.result = result
-            task.status = TaskStatus.COMPLETED
-            task.completed_at = self.task_manager.get_current_time()
-            
-            # Store the result in the state
-            state.results[task.id] = result
-            
-            # Log the execution
-            execution_log = {
-                "timestamp": self.task_manager.get_current_time(),
-                "task_id": task.id,
-                "task_name": task.name,
-                "tool": task.tool,
-                "arguments": task.params,  # Changed from arguments to params
-                "status": "completed",
-                "duration": (task.completed_at - task.started_at) if task.completed_at and task.started_at else None
-            }
-            state.execution_log.append(execution_log)
-            
-            logger.info(f"Task {task.id} ({task.name}) completed successfully")
-        
-        except Exception as e:
-            # Handle task execution failure
-            error_msg = f"Error executing task {task.id} ({task.name}): {str(e)}"
-            logger.error(error_msg)
-            
-            task.status = TaskStatus.FAILED
-            
-            # Make sure the errors attribute exists
-            if not hasattr(task, 'errors'):
-                task.errors = []
-                
-            task.errors.append(error_msg)
-            
-            # Make sure retry_count exists
-            if not hasattr(task, 'retry_count'):
-                task.retry_count = 0
-            
-            task.retry_count += 1
-            
-            # Retry logic
-            if task.retry_count < task.max_retries:
-                task.status = TaskStatus.RETRYING
-                logger.info(f"Retrying task {task.id} ({task.name}), attempt {task.retry_count + 1}/{task.max_retries}")
-            
-            # Log the failure
-            execution_log = {
-                "timestamp": self.task_manager.get_current_time(),
-                "task_id": task.id,
-                "task_name": task.name,
-                "tool": task.tool,
-                "arguments": task.params,  # Changed from arguments to params
-                "status": "failed",
-                "error": str(e),
-                "retry_count": task.retry_count
-            }
-            state.execution_log.append(execution_log)
-            state.error_log.append(error_msg)
-        
-        finally:
-            # Update the task in the task manager
-            self.task_manager.update_task(task)
-            state.task_manager = self.task_manager.to_dict()
-        
-        return state
 
     def _analyze_results(self, state: AgentState) -> AgentState:
         """Analyze task results and determine if new tasks should be added."""
