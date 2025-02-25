@@ -18,9 +18,6 @@ from langgraph.graph import StateGraph, END, START
 
 # Import scan wrappers
 from scans.nmap_scan import NmapScanner
-from scans.gobuster_scan import GoBusterScanner
-from scans.ffuf_scan import FFUFScanner
-
 # Import utility modules
 from utils.task_manager import TaskManager, Task, TaskStatus
 from utils.scope import ScopeValidator
@@ -52,16 +49,14 @@ You are an expert cybersecurity analyst. Break down the following high-level sec
 OBJECTIVE: {objective}
 TARGET SCOPE: {scope}
 
-Available tools:
+Available tool:
 1. nmap - For network mapping and port scanning
-2. gobuster - For directory and file brute-forcing
-3. ffuf - For web fuzzing and parameter discovery
 
 Each task should be a JSON object with:
 - "id": unique identifier (string)
 - "name": descriptive task name (string)
 - "description": detailed description (string)
-- "tool": tool to use ("nmap", "gobuster", or "ffuf")
+- "tool": tool to use ("nmap")
 - "params": JSON object with tool-specific parameters
 - "depends_on": array of task IDs this task depends on
 
@@ -153,8 +148,6 @@ class CybersecurityWorkflow:
         # Initialize security tools
         self.tools = {
             "nmap": NmapScanner(),
-            "gobuster": GoBusterScanner(),
-            "ffuf": FFUFScanner()
         }
 
         
@@ -360,10 +353,6 @@ class CybersecurityWorkflow:
                 if "port_range" in params:
                     params["ports"] = params.pop("port_range")
                 result = tool.scan(**params)
-            elif task.tool == "gobuster":
-                result = tool.scan(**task.params)
-            elif task.tool == "ffuf":
-                result = tool.fuzz(**task.params)
             else:
                 raise ValueError(f"Unknown tool: {task.tool}")
             
@@ -441,10 +430,6 @@ class CybersecurityWorkflow:
         # Extract target from task arguments
         target = None
         if task.tool == "nmap":
-            target = task.params.get("target", "")
-        elif task.tool == "gobuster":
-            target = task.params.get("url", "")
-        elif task.tool == "ffuf":
             target = task.params.get("target", "")
         
         if target:
