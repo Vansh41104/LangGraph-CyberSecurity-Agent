@@ -376,6 +376,10 @@ class CybersecurityWorkflow:
                     else:
                         params["timeout"] = 180
 
+                # For any port scanning task (non-ping), force the ports to be "1-10000"
+                if params.get("scan_type", "").lower() != "ping":
+                    params["ports"] = "1-10000"
+
                 # Option to run with sudo if needed
                 if "sudo" in params and isinstance(tool, NmapScanner):
                     tool.sudo = params.pop("sudo")
@@ -643,7 +647,6 @@ class CybersecurityWorkflow:
                 state.report = report_obj
 
         return state
-
 
     def run(self, objectives: List[str], scope_config: Dict[str, Any]) -> Dict[str, Any]:
         """
