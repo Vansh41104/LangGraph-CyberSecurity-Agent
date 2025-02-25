@@ -4,14 +4,12 @@ import time
 import logging
 from datetime import datetime
 
-
 class TaskStatus(Enum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
-
 
 class Task:
     def __init__(
@@ -77,8 +75,16 @@ class Task:
             "logs": self.logs,
         }
 
-
 class TaskManager:
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TaskManager':
+        task_manager = cls()
+        tasks_data = data.get('tasks', [])
+        for task_dict in tasks_data:
+            task = task_manager.create_task_from_dict(task_dict)
+            task_manager.add_task(task)
+        return task_manager
+
     def __init__(self):
         self.tasks: List[Task] = []
         self.logger = logging.getLogger(__name__)
@@ -206,3 +212,7 @@ class TaskManager:
             "tasks": tasks_summary,
             "generated_at": datetime.now().isoformat(),
         }
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a dictionary representation of all tasks."""
+        return {"tasks": [task.to_dict() for task in self.tasks]}

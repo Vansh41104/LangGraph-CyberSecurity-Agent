@@ -20,7 +20,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Agentic Cybersecurity Pipeline")
     
     # Define command line arguments
-    parser.add_argument("-t", "--task", required=True, help="Security task description (e.g., 'Scan example.com for open ports')")
+    parser.add_argument("-t", "--task", required=True, help="Security task description (e.g., 'Scan for open ports')")
     parser.add_argument("-d", "--domains", nargs="+", default=[], help="Target domains (e.g., example.com *.example.org)")
     parser.add_argument("-i", "--ip-ranges", nargs="+", default=[], help="Target IP ranges (e.g., 192.168.1.0/24 10.0.0.1)")
     parser.add_argument("-o", "--output", help="Output file for the report (default: report_YYYYMMDD_HHMMSS.json)")
@@ -45,15 +45,20 @@ def run_workflow(security_task, domains, ip_ranges, stream=False):
         logger.info(f"Target scope: domains={domains}, ip_ranges={ip_ranges}")
         
         # Initialize the components
-        scope_validator = ScopeValidator(domains, ip_ranges)
+        scope_validator = ScopeValidator()
+        # scope_validator.add_domain("google.com")
         task_manager = TaskManager()
         
         # Initialize the workflow
-        workflow = CybersecurityWorkflow(
-            task_manager=task_manager,
-            scope_validator=scope_validator
+        workflow = CybersecurityWorkflow()
+        result = workflow.run(
+                objectives=["Scan for open ports"],
+                scope_config={
+                "domains": domains,
+                "ip_ranges": ip_ranges
+            }
         )
-        
+
         # Start the workflow
         workflow.start(security_task, stream=stream)
         

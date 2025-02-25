@@ -3,6 +3,7 @@ This module defines the LangGraph workflow for the cybersecurity pipeline.
 It handles task decomposition, execution, and dynamic task management.
 """
 
+import json
 import logging
 import uuid
 from typing import Dict, List, Any, Tuple, Optional, Callable
@@ -13,7 +14,7 @@ from langchain.chains import LLMChain
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 
 from langgraph.graph import StateGraph, END
 import langgraph.prebuilt as prebuilt
@@ -30,13 +31,69 @@ from scans.ffuf_scan import FFUFScanner
 # Setup logger
 logger = logging.getLogger(__name__)
 
+def extract_json_array(text: str):
+        """
+        Extracts a JSON array from the given text.
+
+        Args:
+            text (str): The text containing the JSON array.
+
+        Returns:
+            list: The extracted JSON array.
+
+        Raises:
+            ValueError: If no JSON array is found or if the JSON is invalid.
+        """
+        # Find the first occurrence of '[' and the last occurrence of ']'
+        start = text.find('[')
+        end = text.rfind(']') + 1
+
+        if start == -1 or end == -1:
+            logger.error("No JSON array found in the text.")
+            raise ValueError("No JSON array found in the text.")
+
+        json_array_str = text[start:end]
+
+        # Validate the extracted string to ensure it's a proper JSON array
+        try:
+            json_array = json.loads(json_array_str)
+            if isinstance(json_array, list):
+                return json_array
+            else:
+                logger.error("Extracted JSON is not a list.")
+                raise ValueError("Extracted JSON is not a list.")
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decoding error: {e}")
+            raise ValueError(f"JSON decoding error: {e}")
+
+    # Example usage
+llm_output = """
+    [
+        {
+            "id": "task1",
+            "name": "Port Scan",
+            "description": "Scan mchnsessionform.me for open ports using nmap.",
+            "tool": "nmap",
+            "arguments": {"target": "mchnsessionform.me"},
+            "dependencies": []
+        }
+    ]
+    """
+
+try:
+        tasks = extract_json_array(llm_output)
+        # Proceed with tasks
+except ValueError as e:
+        logger.error(f"Failed to extract JSON array: {e}")
+
+
 # Define state schema
 class AgentState(BaseModel):
     """State schema for the agent workflow."""
     objectives: List[str] = Field(default_factory=list, description="High-level security objectives")
     task_manager: Dict[str, Any] = Field(default_factory=dict, description="Task manager state")
     current_task_id: Optional[str] = Field(default=None, description="ID of the task currently being executed")
-    scope_enforcer: Dict[str, Any] = Field(default_factory=dict, description="Scope enforcer configuration")
+    scope_validator: Dict[str, Any] = Field(default_factory=dict, description="Scope enforcer configuration")
     results: Dict[str, Any] = Field(default_factory=dict, description="Results of completed tasks")
     error_log: List[str] = Field(default_factory=list, description="Log of errors encountered during execution")
     messages: List[Dict[str, Any]] = Field(default_factory=list, description="Conversation history")
@@ -44,12 +101,12 @@ class AgentState(BaseModel):
     report: Dict[str, Any] = Field(default_factory=dict, description="Final report")
 
 # Initialize the LLM
-def get_llm(model="GPT-4o mini", temperature=0):
-    return ChatOpenAI(model=model, temperature=temperature)
+def get_llm(model="llama-3.3-70b-versatile", temperature=0):
+    return ChatGroq(model=model, temperature=temperature)
 
 # Task decomposition prompt
 TASK_DECOMPOSITION_PROMPT = '''
-You are an expert cybersecurity analyst. Your job is to break down high-level security objectives into a series of concrete tasks that can be executed by security tools.
+You are an expert cybersecurity analyst. Your task is to break down the following high-level security objective into a series of concrete tasks that can be executed by security tools.
 
 OBJECTIVE: {objective}
 
@@ -61,31 +118,18 @@ Available tools:
 2. gobuster - For directory and file brute-forcing
 3. ffuf - For web fuzzing and parameter discovery
 
-Each task should include:
-- A descriptive name
-- The tool to use
-- Specific arguments for the tool
-- Dependencies on other tasks (if any)
+Each task should be represented as a JSON object with the following fields:
+- "id": a unique identifier (string)
+- "name": a descriptive task name (string)
+- "description": a detailed description of the task (string)
+- "tool": the tool to use (one of "nmap", "gobuster", or "ffuf")
+- "arguments": a JSON object with tool-specific parameters
+- "dependencies": an array of task IDs (strings) that this task depends on
 
-The tasks should be executed in a logical order, with dependencies clearly specified.
-
-Provide your answer as a JSON list of tasks, each with the following structure:
-```json
-[
-  {
-    "id": "unique_id",
-    "name": "Descriptive task name",
-    "description": "Detailed description of what this task does",
-    "tool": "tool_name",
-    "arguments": {
-      "arg1": "value1",
-      "arg2": "value2"
-    },
-    "dependencies": []
-  }
-]
-```
+IMPORTANT: Provide the output as a JSON array of task objects. Do not include any markdown formatting, bullet points, or extraneous text. The output should be a valid JSON array starting with '[' and ending with ']'.
 '''
+
+
 
 # Result analysis prompt
 RESULT_ANALYSIS_PROMPT = '''
@@ -161,6 +205,48 @@ For each finding, indicate the severity (Critical, High, Medium, Low, Informatio
 
 Format your report in Markdown.
 '''
+class StateGraph:
+    def __init__(self, state_schema):
+        self.state_schema = state_schema
+        self.nodes = {}
+        self.edges = {}
+
+    def add_node(self, name, function):
+        self.nodes[name] = function
+
+    def add_edge(self, from_node, to_node):
+        if from_node not in self.edges:
+            self.edges[from_node] = []
+        self.edges[from_node].append(to_node)
+
+    def add_conditional_edges(self, from_node, condition_function, true_edge, false_edge):
+    # Store a lambda that returns the appropriate next node.
+      self.edges[from_node] = lambda state: true_edge if condition_function(state) else false_edge
+
+
+    def run(self, initial_state):
+        state = initial_state
+        current_node = list(self.nodes.keys())[0]  # Start with the first node
+
+        while current_node != END:
+            node_function = self.nodes[current_node]
+            state = node_function(state)
+
+            if current_node in self.edges:
+                edge = self.edges[current_node]
+                if callable(edge):
+                  condition_function, true_edge, false_edge = edge
+                  if condition_function(state):
+                      current_node = true_edge
+                  else:
+                      current_node = false_edge
+                else:
+                  current_node = edge[0]  # Move to the next node
+# Move to the next node
+            else:
+                break
+
+        return state
 
 class CybersecurityWorkflow:
     """
@@ -171,7 +257,7 @@ class CybersecurityWorkflow:
         """Initialize the workflow with tools and LLM."""
         self.llm = llm or get_llm()
         self.task_manager = TaskManager()
-        self.scope_enforcer = ScopeEnforcer()
+        self.scope_validator = ScopeValidator()
         
         # Initialize security tools
         self.tools = {
@@ -182,6 +268,9 @@ class CybersecurityWorkflow:
         
         # Create the workflow graph
         self.workflow = self._build_workflow()
+
+
+    
     
     def _build_workflow(self) -> StateGraph:
         """Build the LangGraph workflow."""
@@ -197,70 +286,92 @@ class CybersecurityWorkflow:
         workflow.add_node("generate_report", self._generate_report)
         
         # Define edges
+        # Define edges
         workflow.add_edge("decompose_tasks", "select_next_task")
         workflow.add_conditional_edges(
             "select_next_task",
             self._has_next_task,
-            {
-                True: "check_scope",
-                False: "generate_report"
-            }
+            "check_scope",  # True edge
+            "generate_report"  # False edge
         )
+
         workflow.add_conditional_edges(
-            "check_scope",
-            self._is_in_scope,
-            {
-                True: "execute_task",
-                False: "select_next_task"  # Skip task if it's not in scope
-            }
+            "select_next_task",
+            self._has_next_task,
+            "check_scope",  # True edge
+            "generate_report"  # False edge
         )
+
+
+
         workflow.add_edge("execute_task", "analyze_results")
         workflow.add_edge("analyze_results", "select_next_task")
         workflow.add_edge("generate_report", END)
         
         return workflow
-    
+
+  # In your _decompose_tasks method:
     def _decompose_tasks(self, state: AgentState) -> AgentState:
-        """Decompose high-level objectives into executable tasks."""
-        logger.info("Decomposing high-level objectives into tasks")
-        
-        # Create prompt with objectives and scope
-        scope_str = "Domains: " + ", ".join(self.scope_enforcer.domains + self.scope_enforcer.wildcard_domains)
-        scope_str += "\nIP Ranges: " + ", ".join(str(ip_range) for ip_range in self.scope_enforcer.ip_ranges)
-        
-        prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content="You are a cybersecurity task planning assistant."),
-            HumanMessage(content=TASK_DECOMPOSITION_PROMPT.format(
-                objective="\n".join(state.objectives),
-                scope=scope_str
-            ))
-        ])
-        
-        # Parse the output as JSON
-        chain = prompt | self.llm | JsonOutputParser()
-        
-        # Execute the chain
-        tasks_list = chain.invoke({})
-        
-        # Add tasks to the task manager
-        for task_data in tasks_list:
-            task = Task(
-                id=task_data.get("id", str(uuid.uuid4())),
-                name=task_data.get("name", ""),
-                description=task_data.get("description", ""),
-                tool=task_data.get("tool", ""),
-                arguments=task_data.get("arguments", {}),
-                dependencies=task_data.get("dependencies", [])
-            )
-            self.task_manager.add_task(task)
-        
-        # Update the state
-        state.task_manager = self.task_manager.to_dict()
-        
-        # Log the tasks
-        logger.info(f"Created {len(tasks_list)} tasks from objectives")
-        
-        return state
+      """Decompose high-level objectives into executable tasks."""
+      logger.info("Decomposing high-level objectives into tasks")
+
+      # Create prompt with objectives and scope
+      scope_str = "Domains: " + ", ".join(self.scope_validator.domains + self.scope_validator.wildcard_domains)
+      scope_str += "\nIP Ranges: " + ", ".join(str(ip_range) for ip_range in self.scope_validator.ip_ranges)
+
+      prompt = ChatPromptTemplate.from_messages([
+          SystemMessage(content="You are a cybersecurity task planning assistant."),
+          HumanMessage(content=TASK_DECOMPOSITION_PROMPT.format(
+              objective="\n".join(state.objectives),
+              scope=scope_str
+          )),
+          AIMessage(content="Sample message")
+      ])
+
+      # Define the chain using the prompt and LLM
+      chain = prompt | self.llm
+
+      try:
+          raw_output = chain.invoke({})
+
+          # If raw_output is an AIMessage, extract its content
+          if isinstance(raw_output, AIMessage):
+              raw_output = raw_output.content
+
+          logger.debug(f"Raw LLM output: {raw_output}")
+
+          # If the output is already a list, use it directly;
+          # otherwise, extract and parse it.
+          if isinstance(raw_output, list):
+              tasks_list = raw_output
+          else:
+              tasks_list = extract_json_array(raw_output)
+
+          logger.info(f"Tasks list: {tasks_list}")
+
+
+          # Add tasks to the task manager
+          for task_data in tasks_list:
+              task = Task(
+                  name=task_data.get("name", ""),
+                  tool=task_data.get("tool", ""),
+                  params=task_data.get("params", {}),
+                  description=task_data.get("description", ""),
+                  max_retries=task_data.get("max_retries", 3),
+                  depends_on=task_data.get("depends_on", [])
+              )
+              self.task_manager.add_task(task)
+
+          state.task_manager = self.task_manager.to_dict()
+          logger.info(f"Created {len(tasks_list)} tasks from objectives")
+
+      except Exception as e:
+          logger.error(f"Error decomposing tasks: {str(e)}")
+          state.error_log.append(f"Error decomposing tasks: {str(e)}")
+
+      return state
+
+
     
     def _select_next_task(self, state: AgentState) -> AgentState:
         """Select the next task to execute based on dependencies and status."""
@@ -314,7 +425,7 @@ class CybersecurityWorkflow:
         
         if target:
             # Check if target is in scope
-            is_in_scope = self.scope_enforcer.is_in_scope(target)
+            is_in_scope = self.scope_validator.is_in_scope(target)
             if not is_in_scope:
                 logger.warning(f"Task {task.id} ({task.name}) target {target} is out of scope - skipping")
                 task.status = TaskStatus.SKIPPED
@@ -470,10 +581,10 @@ class CybersecurityWorkflow:
             })
         
         # Create scope summary
-        scope_enforcer_dict = state.scope_enforcer
-        scope_summary = "Domains: " + ", ".join(scope_enforcer_dict.get("domains", []) + 
-                                               scope_enforcer_dict.get("wildcard_domains", []))
-        scope_summary += "\nIP Ranges: " + ", ".join(str(ip) for ip in scope_enforcer_dict.get("ip_ranges", []))
+        scope_validator_dict = state.scope_validator
+        scope_summary = "Domains: " + ", ".join(scope_validator_dict.get("domains", []) + 
+                                               scope_validator_dict.get("wildcard_domains", []))
+        scope_summary += "\nIP Ranges: " + ", ".join(str(ip) for ip in scope_validator_dict.get("ip_ranges", []))
         
         # Create the prompt
         prompt = ChatPromptTemplate.from_messages([
@@ -537,10 +648,10 @@ class CybersecurityWorkflow:
             }
         
         # Create scope summary
-        scope_enforcer_dict = state.scope_enforcer
-        scope_summary = "Domains: " + ", ".join(scope_enforcer_dict.get("domains", []) + 
-                                               scope_enforcer_dict.get("wildcard_domains", []))
-        scope_summary += "\nIP Ranges: " + ", ".join(str(ip) for ip in scope_enforcer_dict.get("ip_ranges", []))
+        scope_validator_dict = state.scope_validator
+        scope_summary = "Domains: " + ", ".join(scope_validator_dict.get("domains", []) + 
+                                               scope_validator_dict.get("wildcard_domains", []))
+        scope_summary += "\nIP Ranges: " + ", ".join(str(ip) for ip in scope_validator_dict.get("ip_ranges", []))
         
         # Create prompt for report generation
         prompt = ChatPromptTemplate.from_messages([
@@ -603,17 +714,33 @@ class CybersecurityWorkflow:
         # Initialize the state
         initial_state = AgentState(
             objectives=objectives,
-            scope_enforcer={
-                "domains": self.scope_enforcer.domains,
-                "wildcard_domains": self.scope_enforcer.wildcard_domains,
-                "ip_ranges": [str(ip) for ip in self.scope_enforcer.ip_ranges],
-                "enabled": self.scope_enforcer.enabled
+            scope_validator={
+                "domains": self.scope_validator.domains,
+                "wildcard_domains": self.scope_validator.wildcard_domains,
+                "ip_ranges": [str(ip) for ip in self.scope_validator.ip_ranges],
+                "enabled": self.scope_validator.enabled
             }
         )
         
         # Run the workflow
         logger.info(f"Starting cybersecurity workflow with objectives: {objectives}")
-        final_state = self.workflow.invoke(initial_state)
+        final_state = self.workflow.run(initial_state)
+
+        if isinstance(edge, tuple):
+            condition_function, true_edge, false_edge = edge
+            if condition_function(state):
+                current_node = true_edge
+            else:
+                current_node = false_edge
+        elif callable(edge):
+            # If edge is a callable (e.g., a lambda), call it to get the next node.
+            current_node = edge(state)
+        else:
+            # Otherwise, assume edge is a simple next node identifier.
+            current_node = edge
+
+
+
         
         return {
             "report": final_state.report,
@@ -630,27 +757,27 @@ class CybersecurityWorkflow:
             scope_config: Configuration for the scope enforcer
         """
         # Reset the scope enforcer
-        self.scope_enforcer = ScopeEnforcer()
+        self.scope_validator = ScopeValidator()
         
         # Add domains
         for domain in scope_config.get("domains", []):
-            self.scope_enforcer.add_domain(domain)
+            self.scope_validator.add_domain(domain)
         
         # Add wildcard domains
         for wildcard in scope_config.get("wildcard_domains", []):
-            self.scope_enforcer.add_wildcard_domain(wildcard)
+            self.scope_validator.add_wildcard_domain(wildcard)
         
         # Add IP ranges
         for ip_range in scope_config.get("ip_ranges", []):
-            self.scope_enforcer.add_ip_range(ip_range)
+            self.scope_validator.add_ip_range(ip_range)
         
         # Add individual IPs
         for ip in scope_config.get("ips", []):
-            self.scope_enforcer.add_ip(ip)
+            self.scope_validator.add_ip(ip)
         
         # Set enabled status
-        self.scope_enforcer.enabled = scope_config.get("enabled", True)
+        self.scope_validator.enabled = scope_config.get("enabled", True)
         
-        logger.info(f"Scope enforcer configured with {len(self.scope_enforcer.domains)} domains, "
-                   f"{len(self.scope_enforcer.wildcard_domains)} wildcard domains, and "
-                   f"{len(self.scope_enforcer.ip_ranges)} IP ranges")
+        logger.info(f"Scope enforcer configured with {len(self.scope_validator.domains)} domains, "
+                   f"{len(self.scope_validator.wildcard_domains)} wildcard domains, and "
+                   f"{len(self.scope_validator.ip_ranges)} IP ranges")
