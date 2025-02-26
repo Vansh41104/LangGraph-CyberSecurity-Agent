@@ -1,10 +1,11 @@
 from enum import Enum
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional
 import time
 import logging
 from datetime import datetime
 import uuid
 
+logger = logging.getLogger(__name__)
 
 class TaskStatus(Enum):
     PENDING = "pending"
@@ -14,16 +15,15 @@ class TaskStatus(Enum):
     SKIPPED = "skipped"
     RETRYING = "retrying"
 
-
 class Task:
     def __init__(self, 
-                 id=None, 
-                 name="", 
-                 tool="", 
-                 params=None, 
-                 description="", 
-                 max_retries=3, 
-                 depends_on=None):
+                 id: Optional[str] = None, 
+                 name: str = "", 
+                 tool: str = "", 
+                 params: Optional[Dict[str, Any]] = None, 
+                 description: str = "", 
+                 max_retries: int = 3, 
+                 depends_on: Optional[List[str]] = None):
         self.id = id or str(uuid.uuid4())
         self.name = name
         self.description = description
@@ -77,6 +77,7 @@ class Task:
             "depends_on": self.depends_on,
             "logs": self.logs,
         }
+
 class TaskManager:
     def __init__(self):
         self.tasks: List[Task] = []
@@ -137,7 +138,9 @@ class TaskManager:
         return task_manager
 
     def create_task_from_dict(self, task_dict: Dict[str, Any]) -> Task:
+        # Preserve the id if it exists in the dict.
         task = Task(
+            id=task_dict.get("id"),  # Now include the id from the dict if present.
             name=task_dict["name"],
             tool=task_dict["tool"],
             params=task_dict["params"],

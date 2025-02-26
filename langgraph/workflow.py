@@ -12,6 +12,7 @@ from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, END, START
 import datetime
 import re
+import os
 
 
 # Import scan wrappers
@@ -170,9 +171,6 @@ class CybersecurityWorkflow:
 
     def _build_workflow(self) -> StateGraph:
         """Build the LangGraph workflow."""
-        # Option 1: If your StateGraph supports a recursion_limit argument in the constructor:
-        # workflow = StateGraph(AgentState, recursion_limit=50)
-        
         # Option 2: Otherwise, create the graph normally and then set the recursion_limit attribute.
         workflow = StateGraph(AgentState)
         
@@ -208,11 +206,9 @@ class CybersecurityWorkflow:
         workflow.add_edge("generate_report", END)
 
         # Increase the recursion limit by setting a custom attribute.
-        # Adjust this value as needed.
         setattr(workflow, "recursion_limit", 50)
 
         return workflow
-
 
     def _check_scope_condition(self, state: AgentState) -> bool:
         """Determine if the current task is in scope."""
@@ -230,7 +226,6 @@ class CybersecurityWorkflow:
         return task.status != TaskStatus.SKIPPED
 
     def _decompose_tasks(self, state: AgentState) -> AgentState:
-        """Decompose high-level objectives into executable tasks."""
         logger.info("Decomposing high-level objectives into tasks")
         self.task_manager = TaskManager()
 
@@ -256,10 +251,12 @@ class CybersecurityWorkflow:
 
             logger.debug(f"Raw LLM output: {raw_output}")
 
-            # Extract tasks list from output
+            # Parse the output into a list of tasks
             tasks_list = extract_json_array(raw_output) if isinstance(raw_output, str) else raw_output
+            if not isinstance(tasks_list, list):
+                raise ValueError(f"Decomposed tasks output is not a list: {tasks_list}")
 
-            # Limit tasks to a maximum of 10
+            # Limit to first 10 tasks if needed
             if len(tasks_list) > 10:
                 logger.info(f"Limiting tasks: Only the first 10 of {len(tasks_list)} tasks will be processed")
                 tasks_list = tasks_list[:10]
@@ -267,28 +264,32 @@ class CybersecurityWorkflow:
             logger.info(f"Tasks list: {tasks_list}")
 
             for task_data in tasks_list:
-                logger.debug(f"Task data before extraction: {task_data}")
-                params = task_data.get("params", task_data.get("arguments", {}))
-                depends_on = task_data.get("depends_on", task_data.get("dependencies", []))
+                # Only process if task_data is a dict
+                if not isinstance(task_data, dict):
+                    logger.warning(f"Skipping invalid task data (expected dict, got {type(task_data)}): {task_data}")
+                    continue
+                task_id = task_data.get("id")
+                if not task_id:
+                    task_id = str(uuid.uuid4())
                 task = Task(
-                    id=task_data.get("id", None),
+                    id=task_id,
                     name=task_data.get("name", ""),
                     tool=task_data.get("tool", ""),
-                    params=params,
+                    params=task_data.get("params", task_data.get("arguments", {})),
                     description=task_data.get("description", ""),
                     max_retries=task_data.get("max_retries", 3),
-                    depends_on=depends_on
+                    depends_on=task_data.get("depends_on", task_data.get("dependencies", []))
                 )
                 self.task_manager.add_task(task)
 
             state.task_manager = self.task_manager.to_dict()
             logger.info(f"Created {len(tasks_list)} tasks from objectives")
-
         except Exception as e:
             logger.error(f"Error decomposing tasks: {str(e)}")
             state.error_log.append(f"Error decomposing tasks: {str(e)}")
-
         return state
+
+
     def _get_next_executable_task(self) -> Optional[Task]:
         """
         Returns the next pending task whose dependencies are all completed.
@@ -323,7 +324,6 @@ class CybersecurityWorkflow:
         return state
 
     def _execute_task(self, state: AgentState) -> AgentState:
-        """Execute the current task using the appropriate tool."""
         task_id = state.current_task_id
         if not task_id:
             logger.info("No task ID provided, skipping execution")
@@ -331,7 +331,7 @@ class CybersecurityWorkflow:
 
         if isinstance(state.task_manager, dict):
             self.task_manager.from_dict(state.task_manager)
-
+        
         task = self.task_manager.get_task(task_id)
         if not task:
             logger.warning(f"Task {task_id} not found, skipping execution")
@@ -350,66 +350,51 @@ class CybersecurityWorkflow:
             if not tool:
                 raise ValueError(f"Tool '{task.tool}' not found")
 
-            if task.tool == "nmap":
-                params = task.params.copy()
-                if "target" not in params or not params.get("target"):
-                    logger.error("Target parameter is missing.")
-                    raise ValueError("Target parameter is missing.")
+            params = task.params.copy()
+            if "target" not in params or not params.get("target"):
+                logger.error("Target parameter is missing.")
+                raise ValueError("Target parameter is missing.")
 
-                if isinstance(params["target"], list):
-                    pass
-                elif isinstance(params["target"], str) and "," in params["target"]:
-                    params["target"] = [t.strip() for t in params["target"].split(",")]
+            if isinstance(params["target"], str) and "," in params["target"]:
+                params["target"] = [t.strip() for t in params["target"].split(",")]
 
-                if task.params.get("version_detection", False):
-                    if "arguments" in params:
-                        params["arguments"] += " -sV"
-                    else:
-                        params["arguments"] = "-sV"
+            if task.params.get("version_detection", False):
+                if "arguments" in params:
+                    params["arguments"] += " -sV"
+                else:
+                    params["arguments"] = "-sV"
 
-                if "timeout" not in params:
-                    params["timeout"] = 180
+            if "timeout" not in params:
+                params["timeout"] = 180
 
-                if "sudo" in params and isinstance(tool, NmapScanner):
-                    tool.sudo = params.pop("sudo")
+            if "sudo" in params and isinstance(tool, NmapScanner):
+                tool.sudo = params.pop("sudo")
 
-                logger.info(f"Executing nmap scan with parameters: {params}")
-                result = tool.scan(**params)
-                self.debug_nmap_results(result, task.id)
+            logger.info(f"Executing nmap scan with parameters: {params}")
+            result = tool.scan(**params)
+            self.debug_nmap_results(result, task.id)
 
-                task.result = result
-                task.status = TaskStatus.COMPLETED
-                state.results[task.id] = result
+            task.result = result
+            task.status = TaskStatus.COMPLETED
+            state.results[task.id] = result
 
-                logger.info(f"Completed task: {task.name} (ID: {task.id})")
-
+            logger.info(f"Completed task: {task.name} (ID: {task.id})")
         except Exception as e:
             error_msg = f"Error executing task {task.id} ({task.name}): {str(e)}"
             logger.error(error_msg)
             task.status = TaskStatus.FAILED
             task.errors.append(error_msg)
-            if not hasattr(task, 'retry_count'):
-                task.retry_count = 0
-            task.retry_count += 1
-            max_retries = getattr(task, 'max_retries', 3)
-            if task.retry_count < max_retries:
+            task.retry_count = getattr(task, 'retry_count', 0) + 1
+            if task.retry_count < getattr(task, 'max_retries', 3):
                 task.status = TaskStatus.RETRYING
                 retry_delay = min(2 ** task.retry_count, 60)
-                logger.info(f"Retrying task {task.id} ({task.name}) in {retry_delay}s, attempt {task.retry_count}/{max_retries}")
-                if not hasattr(task, 'retry_info'):
-                    task.retry_info = []
-                task.retry_info.append({
-                    "attempt": task.retry_count,
-                    "timestamp": self.task_manager.get_current_time(),
-                    "error": str(e),
-                    "next_retry_delay": retry_delay
-                })
+                logger.info(f"Retrying task {task.id} ({task.name}) in {retry_delay}s, attempt {task.retry_count}")
             state.error_log.append(error_msg)
         finally:
             self.task_manager.update_task(task)
             state.task_manager = self.task_manager.to_dict()
-
         return state
+
 
     def debug_nmap_results(self, result: Any, task_id: str) -> Any:
         """Debug helper to ensure nmap results are properly captured."""
@@ -570,6 +555,7 @@ class CybersecurityWorkflow:
                             params = task_data.get("params", task_data.get("arguments", {}))
                             depends_on = task_data.get("depends_on", task_data.get("dependencies", []))
                             new_task = Task(
+                                id=task_data.get("id") or str(uuid.uuid4()),
                                 name=task_data.get("name", ""),
                                 tool=task_data.get("tool", ""),
                                 params=params,
@@ -781,8 +767,6 @@ Please output only the final report.
                 "results": {},
                 "execution_log": []
             }
-
-
 
     def _setup_scope(self, scope_config: Dict[str, Any]) -> None:
         """
