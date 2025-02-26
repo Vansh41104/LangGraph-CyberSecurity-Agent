@@ -233,6 +233,8 @@ class NmapScanner:
             # Read the XML content
             with open(xml_file, "r") as f:
                 xml_content = f.read().strip()
+                logger.debug(f"XML content preview: {xml_content[:300]}")  # Log preview for debugging
+
 
             if not xml_content:
                 logger.error("XML output is empty")
@@ -423,57 +425,54 @@ class NmapScanner:
             return result
 
     def extract_open_ports(self, scan_results: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Extract open ports from scan results with improved details.
-
-        Args:
-            scan_results: Parsed scan results
-
-        Returns:
-            List of open ports with details
-        """
         open_ports = []
         for host in scan_results.get("hosts", []):
-            # Get host information
-            host_info = {
-                "ip": None,
-                "hostname": None,
-            }
-
-            # Extract IP address
+            # Extract IP address from addresses list
+            ip = None
             for addr in host.get("addresses", []):
                 if addr.get("addrtype") == "ipv4":
-                    host_info["ip"] = addr.get("addr")
+                    ip = addr.get("addr")
                     break
 
-            # Extract hostname
-            for hostname in host.get("hostnames", []):
-                if hostname.get("type") == "PTR":
-                    host_info["hostname"] = hostname.get("name")
+            # Extract hostname if available
+            hostname = None
+            for h in host.get("hostnames", []):
+                hostname = h.get("name")
+                if hostname:
                     break
 
-            # Extract open ports
+            # Loop through ports and check if state is open
             for port in host.get("ports", []):
-                if port.get("state", {}).get("state") == "open":
-                    service = port.get("service", {})
-                    scripts = port.get("scripts", [])
+                state = port.get("state", {}).get("state")
+                if state == "open":
+                    # Try to fetch port and protocol info directly
+                    port_number = port.get("id", {}).get("portid") or port.get("portid")
+                    protocol = port.get("id", {}).get("protocol") or port.get("protocol")
+                    service_data = port.get("service", {})
+                    service = service_data.get("name", "unknown")
+                    product = service_data.get("product", "")
+                    version = service_data.get("version", "")
+                    extrainfo = service_data.get("extrainfo", "")
+                    tunnel = service_data.get("tunnel", "")
+                    cpe = service_data.get("cpe", "")
 
                     port_info = {
-                        "host_ip": host_info["ip"],
-                        "hostname": host_info["hostname"],
-                        "port": port["id"].get("portid"),
-                        "protocol": port["id"].get("protocol"),
-                        "service": service.get("name", "unknown"),
-                        "product": service.get("product", ""),
-                        "version": service.get("version", ""),
-                        "extrainfo": service.get("extrainfo", ""),
-                        "tunnel": service.get("tunnel", ""),
-                        "cpe": service.get("cpe", ""),
-                        "scripts": [script.get("id") for script in scripts],
+                        "host_ip": ip,
+                        "hostname": hostname,
+                        "port": port_number,
+                        "protocol": protocol,
+                        "service": service,
+                        "product": product,
+                        "version": version,
+                        "extrainfo": extrainfo,
+                        "tunnel": tunnel,
+                        "cpe": cpe,
+                        # Optionally include script IDs if available
+                        "scripts": [script.get("id") for script in port.get("scripts", [])],
                     }
                     open_ports.append(port_info)
-
         return open_ports
+
 
     def extract_hosts(self, scan_results: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
