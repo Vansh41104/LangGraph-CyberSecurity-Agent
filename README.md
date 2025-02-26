@@ -71,7 +71,7 @@ LOG_FILE=pipeline.log
 Run the main script to start the cybersecurity agent:
 
 ```bash
-python3 main.py -t "Scan google.com for open ports" -d google.com
+python3 main.py -t "Scan <Domain Name> for open ports" -d <Domain Name>
 ```
 
 ### Running Examples
