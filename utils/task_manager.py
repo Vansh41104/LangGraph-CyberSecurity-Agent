@@ -94,6 +94,10 @@ class TaskManager:
         self.logger.info(f"Added task: {task.name} (ID: {task.id})")
         return task.id
 
+    def has_task(self, task_id: str) -> bool:
+        """Check if a task with the given ID already exists."""
+        return any(task.id == task_id for task in self.tasks)
+
     def get_task(self, task_id: str) -> Optional[Task]:
         """Retrieve a task by its ID."""
         for task in self.tasks:

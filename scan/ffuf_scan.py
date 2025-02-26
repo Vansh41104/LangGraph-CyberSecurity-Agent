@@ -1,0 +1,133 @@
+import subprocess
+import tempfile
+import os
+import logging
+import shlex
+import json
+from typing import Dict, Any, List, Optional, Union
+from utils.retry import retry_operation
+
+logger = logging.getLogger(__name__)
+
+class FFUFScanner:
+    """
+    Wrapper for ffuf to perform web fuzzing.
+    """
+
+    def __init__(self, binary_path: str = "ffuf", sudo: bool = False):
+        """
+        Initialize the FFUFScanner.
+
+        Args:
+            binary_path: Path to the ffuf executable.
+            sudo: Whether to run ffuf with sudo.
+        """
+        self.binary_path = binary_path
+        self.sudo = sudo
+        self.verify_installation()
+
+    def verify_installation(self):
+        """Verify that ffuf is installed and accessible."""
+        cmd = [self.binary_path, "-V"]
+        if self.sudo:
+            cmd.insert(0, "sudo")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"ffuf verification failed with code {result.returncode}: {result.stderr.strip()}"
+                )
+            version_info = result.stdout.splitlines()[0]
+            logger.info(f"ffuf version: {version_info}")
+        except (subprocess.SubprocessError, FileNotFoundError) as e:
+            logger.error(f"ffuf installation verification failed: {e}")
+            raise RuntimeError(f"ffuf is not installed or accessible: {e}")
+
+    def _build_command(
+        self,
+        target: str,
+        wordlist: str,
+        threads: int,
+        extra_args: str,
+        output_file: str,
+        output_format: str = "json"
+    ) -> List[str]:
+        """
+        Build the ffuf command.
+
+        Args:
+            target: Target URL with FUZZ placeholder (e.g., http://example.com/FUZZ).
+            wordlist: Path to wordlist file.
+            threads: Number of threads.
+            extra_args: Additional arguments.
+            output_file: Path to store output.
+            output_format: Output format, default is json.
+
+        Returns:
+            List of command elements.
+        """
+        cmd = []
+        if self.sudo:
+            cmd.append("sudo")
+        cmd.append(self.binary_path)
+        cmd.extend(["-u", target])
+        cmd.extend(["-w", wordlist])
+        cmd.extend(["-t", str(threads)])
+        # Set output format and file for structured parsing.
+        cmd.extend(["-of", output_format, "-o", output_file])
+        if extra_args:
+            cmd.extend(shlex.split(extra_args))
+        return cmd
+
+    @retry_operation(max_retries=2, retry_exceptions=(subprocess.TimeoutExpired, RuntimeError))
+    def scan(
+        self,
+        target: str,
+        wordlist: str,
+        threads: int = 10,
+        extra_args: str = "",
+        timeout: int = 300,
+        output_format: str = "json"
+    ) -> Dict[str, Any]:
+        """
+        Run an ffuf scan against the target.
+
+        Args:
+            target: URL with FUZZ placeholder.
+            wordlist: Path to wordlist.
+            threads: Number of threads.
+            extra_args: Additional ffuf arguments.
+            timeout: Timeout in seconds.
+            output_format: Output format (default json).
+
+        Returns:
+            Parsed scan results as dictionary.
+        """
+        with tempfile.NamedTemporaryFile(prefix="ffuf_scan_", suffix=".json", delete=False) as tmp_file:
+            output_path = tmp_file.name
+
+        try:
+            cmd = self._build_command(target, wordlist, threads, extra_args, output_path, output_format)
+            command_str = " ".join(cmd)
+            logger.info(f"Executing ffuf scan: {command_str}")
+            process = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            if process.returncode != 0:
+                error_msg = f"ffuf scan failed with code {process.returncode}: {process.stderr}"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            with open(output_path, "r") as f:
+                results = json.load(f)
+            results.update({
+                "command": command_str,
+                "stdout": process.stdout,
+                "stderr": process.stderr,
+            })
+            return results
+        except subprocess.TimeoutExpired:
+            logger.error(f"ffuf scan timed out after {timeout} seconds")
+            raise RuntimeError(f"Scan timed out after {timeout} seconds")
+        finally:
+            try:
+                os.unlink(output_path)
+            except Exception as e:
+                logger.warning(f"Failed to remove temporary file {output_path}: {e}")
