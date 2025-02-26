@@ -1,7 +1,7 @@
 # LangGraph CyberSecurity Agent
 
 ![Security Shield](https://img.shields.io/badge/Security-Enhanced-blue)
-![Python](https://img.shields.io/badge/Python-3.8+-green)
+![Python](https://img.shields.io/badge/Python-3.11+-green)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
 A comprehensive cybersecurity solution built using LangGraph, a powerful framework for constructing stateful, multi-agent applications with Large Language Models (LLMs). This agent serves as your security sentinel, continuously monitoring and protecting your systems against potential threats.
@@ -18,7 +18,7 @@ A comprehensive cybersecurity solution built using LangGraph, a powerful framewo
 
 ### Prerequisites
 
-- Python 3.8 or higher
+- python33.8 or higher
 - Access to necessary API keys (configured in environment variables)
 
 ### Setup
@@ -71,7 +71,7 @@ LOG_FILE=pipeline.log
 Run the main script to start the cybersecurity agent:
 
 ```bash
-python main.py
+python3 main.py -t "Scan google.com for open ports" -d google.com
 ```
 
 ### Running Examples
@@ -87,7 +87,7 @@ sh run_examples.sh
 For a more interactive experience, launch the Streamlit application:
 
 ```bash
-python main.py --streamlit
+python3 main.py --streamlit
 ```
 
 This provides a web-based GUI for interacting with the agent, viewing scan results, and configuring security policies.
@@ -100,25 +100,31 @@ LangGraph_CyberSecurity_Agent/
 ├── .gitignore               # Git ignore file
 ├── debug/                   # Debug information and logs
 ├── langraph/                # LangGraph core components
-│   ├── __pycache__/         # Python cache directory
+│   ├── __pycache__/         # python3 cache directory
 │   └── workflow.py          # Main workflow definition
 ├── logs/                    # Log files directory
 ├── main.py                  # Application entry point
+├── LICENSE                  # MIT License file
 ├── README.md                # Project documentation
 ├── requirements.txt         # Project dependencies
 ├── run_examples.sh          # Script to run example implementations
+├── pytest_cache/            # Pytest cache directory
 ├── scan/                    # Scanning modules
-│   ├── __pycache__/         # Python cache directory
+│   ├── __pycache__/         # python3 cache directory
 │   └── nmap_scan.py         # Nmap scanning implementation
 ├── streamlit_app/           # Interactive web interface
 │   └── app.py               # Streamlit application
 ├── tests/                   # Test suite
-└── utils/                   # Utility functions
-    ├── __pycache__/         # Python cache directory
-    ├── logger.py            # Logging functionality
-    ├── retry.py             # Retry mechanism for failed operations
-    ├── scope.py             # Scope definition utilities
-    └── task_manager.py      # Task management functionality
+│   ├── __pycache__/         # python3 cache directory
+│   ├── test_scope.py        # Tests for scope functionality
+│   └── test_task_manager.py # Tests for task manager functionality
+├── utils/                   # Utility functions
+│   ├── __pycache__/         # python3cache directory
+│   ├── retry.py             # Retry mechanism for failed operations
+│   ├── scope.py             # Scope definition utilities
+│   └── task_manager.py      # Task management functionality
+└── venv/                    # Virtual environment directory
+    └── ...                  # Virtual environment files
 ```
 
 ## 🔧 Configuration Options
@@ -142,8 +148,20 @@ The agent can be configured through environment variables or a `.env` file:
 - **nmap_scan.py**: Implements network scanning functionality using Nmap
 - **task_manager.py**: Manages the execution and monitoring of cybersecurity tasks
 - **retry.py**: Provides resilient operation with automatic retries for transient failures
-- **logger.py**: Handles logging of security events and system activities
 - **scope.py**: Defines the scope of security scanning operations
+
+## 🧪 Testing
+
+Run the test suite to ensure all components are functioning correctly:
+
+```bash
+# Run all tests
+python3 -m pytest tests/
+
+# Run specific tests
+python3 -m pytest tests/test_task_manager.py::TestTask -v
+python3 -m pytest tests/test_scope.py -v
+```
 
 ## 📈 Performance Considerations
 
