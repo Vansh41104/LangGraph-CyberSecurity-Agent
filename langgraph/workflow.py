@@ -417,6 +417,7 @@ class CybersecurityWorkflow:
             logger.info("No task ID provided, skipping execution")
             return state
 
+        task = None
         try:
             if isinstance(state.task_manager, dict):
                 self.task_manager.from_dict(state.task_manager)
@@ -441,9 +442,14 @@ class CybersecurityWorkflow:
                 raise ValueError(f"Tool '{task.tool}' not found")
             
             params = task.params.copy()
-            if "target" not in params or not params.get("target"):
-                logger.error("Target parameter is missing.")
-                raise ValueError("Target parameter is missing.")
+            
+            # Ensure a target is provided. For sqlmap, allow using "target_url" if "target" is missing.
+            if not params.get("target"):
+                if task.tool == "sqlmap" and params.get("target_url"):
+                    params["target"] = params["target_url"]
+                else:
+                    logger.error("Target parameter is missing.")
+                    raise ValueError("Target parameter is missing.")
             
             # Handle comma-separated targets
             if isinstance(params["target"], str) and "," in params["target"]:
@@ -453,7 +459,7 @@ class CybersecurityWorkflow:
             if task.tool == "nmap" and "script_args" in params:
                 params["arguments"] = params.pop("script_args")
             
-            # Configure tool-specific parameters
+            # Configure tool-specific parameters for nmap
             if task.tool == "nmap":
                 if "scan_type" not in params or params["scan_type"] == "syn":
                     if "arguments" in params:
@@ -466,7 +472,9 @@ class CybersecurityWorkflow:
                     else:
                         params["arguments"] = "-sV --version-intensity=2"
             
-            # Set timeout and sudo
+            # (Optional) You could add tool-specific configuration here for gobuster, ffuf, or sqlmap if needed.
+            
+            # Set timeout and sudo if applicable
             params["timeout"] = min(params.get("timeout", 180), 180)
             if "sudo" in params and hasattr(tool, "sudo"):
                 tool.sudo = params.pop("sudo")
@@ -475,7 +483,11 @@ class CybersecurityWorkflow:
             logger.info(f"Executing {task.tool} scan with parameters: {params}")
             result = tool.scan(**params)
             
-            # Process result (rest of your function follows)...
+            # Save result and mark task as completed
+            task.result = result
+            task.status = TaskStatus.COMPLETED
+            state.results[task.id] = result
+            logger.info(f"Task {task.id} completed successfully")
             
         except Exception as e:
             error_msg = f"Error executing task {task_id} ({task.name if task else 'unknown'}): {str(e)}"
@@ -494,8 +506,9 @@ class CybersecurityWorkflow:
             if task:
                 self.task_manager.update_task(task)
                 state.task_manager = self.task_manager.to_dict()
-                    
+                        
         return state
+
 
     def debug_scan_results(self, result: Any, task_id: str, tool_name: str) -> Any:
         try:
