@@ -31,33 +31,33 @@ logger = logging.getLogger(__name__)
 
 # Updated task decomposition prompt to include multiple tools.
 TASK_DECOMPOSITION_PROMPT = '''
-    You are an expert cybersecurity analyst. Break down the following high-level security objective into concrete tasks:
+You are an expert cybersecurity analyst. Break down the following high-level security objective into concrete tasks using all the available tools listed below. Generate at least one task for each tool if applicable.
 
-    OBJECTIVE: {objective}
-    TARGET SCOPE: {scope}
+OBJECTIVE: {objective}
+TARGET SCOPE: {scope}
 
-    Available tools:
-    1. nmap - For network mapping and port scanning
-    2. gobuster - For directory and file enumeration
-    3. ffuf - For web fuzzing to discover hidden endpoints
-    4. sqlmap - For testing SQL injection vulnerabilities and data extraction
+Available tools:
+1. nmap - For network mapping and port scanning.
+2. gobuster - For directory and file enumeration.
+3. ffuf - For web fuzzing to discover hidden endpoints.
+4. sqlmap - For testing SQL injection vulnerabilities and data extraction.
 
-    For tasks, provide parameters in this strict JSON format. Here are examples:
+Provide your response as a valid JSON array of task objects in the following format:
+For nmap:
+{"id": "task1", "name": "Initial port scan", "description": "Perform a port scan to identify open ports", "tool": "nmap", "params": {"target": "example.com", "scan_type": "syn", "ports": "1-1000"}, "depends_on": []}
 
-    For nmap:
-    {{"id": "task1", "name": "Initial ping sweep", "description": "Perform a ping sweep to identify live hosts", "tool": "nmap", "params": {{"target": "example.com", "scan_type": "ping"}}, "depends_on": []}}
-    
-    For gobuster:
-    {{"id": "task2", "name": "Directory enumeration", "description": "Enumerate directories using gobuster", "tool": "gobuster", "params": {{"target": "http://example.com", "wordlist": "wordlist.txt", "extensions": "php,html", "threads": 15}}, "depends_on": []}}
-    
-    For ffuf:
-    {{"id": "task3", "name": "Web fuzzing", "description": "Fuzz for hidden endpoints", "tool": "ffuf", "params": {{"target": "http://example.com/FUZZ", "wordlist": "fuzzlist.txt", "threads": 10}}, "depends_on": []}}
-    
-    For sqlmap:
-    {{"id": "task4", "name": "SQL Injection test", "description": "Test for SQL injection", "tool": "sqlmap", "params": {{"target_url": "http://example.com/vulnerable.php?id=1"}}, "depends_on": []}}
-    
-    IMPORTANT: Your ENTIRE response must be a valid JSON array of task objects. Begin with [ and end with ]. Do not include any explanation text, markdown formatting, or code blocks. Return only the JSON array.
+For gobuster:
+{"id": "task2", "name": "Directory enumeration", "description": "Enumerate directories using gobuster", "tool": "gobuster", "params": {"target": "http://example.com", "wordlist": "wordlist.txt", "extensions": "php,html", "threads": 15}, "depends_on": []}
+
+For ffuf:
+{"id": "task3", "name": "Web fuzzing", "description": "Fuzz for hidden endpoints", "tool": "ffuf", "params": {"target": "http://example.com/FUZZ", "wordlist": "fuzzlist.txt", "threads": 10}, "depends_on": []}
+
+For sqlmap:
+{"id": "task4", "name": "SQL Injection test", "description": "Test for SQL injection vulnerabilities", "tool": "sqlmap", "params": {"target_url": "http://example.com/vulnerable.php?id=1"}, "depends_on": []}
+
+IMPORTANT: Your ENTIRE response must be a valid JSON array of task objects. Begin with [ and end with ]. Do not include any explanation text, markdown formatting, or code blocks. Return only the JSON array.
 '''
+
 
 RESULT_ANALYSIS_PROMPT = ''' You are an expert cybersecurity analyst. Review these scan results and determine follow-up actions.
 
@@ -455,12 +455,19 @@ class CybersecurityWorkflow:
             if isinstance(params["target"], str) and "," in params["target"]:
                 params["target"] = [t.strip() for t in params["target"].split(",")]
             
-            # Map 'script_args' to 'arguments' for Nmap tasks if present
-            if task.tool == "nmap" and "script_args" in params:
-                params["arguments"] = params.pop("script_args")
-            
-            # Configure tool-specific parameters for nmap
+            # For nmap, process tool-specific parameters
             if task.tool == "nmap":
+                # Map 'script_args' to 'arguments' if present
+                if "script_args" in params:
+                    params["arguments"] = params.pop("script_args")
+                # If a "script" parameter is provided, append it as a --script option
+                if "script" in params:
+                    script_value = params.pop("script")
+                    if "arguments" in params:
+                        params["arguments"] += f" --script={script_value}"
+                    else:
+                        params["arguments"] = f"--script={script_value}"
+                # Configure nmap scan type arguments
                 if "scan_type" not in params or params["scan_type"] == "syn":
                     if "arguments" in params:
                         params["arguments"] += " -T4 --max-retries=2"
@@ -471,8 +478,6 @@ class CybersecurityWorkflow:
                         params["arguments"] += " -sV --version-intensity=2"
                     else:
                         params["arguments"] = "-sV --version-intensity=2"
-            
-            # (Optional) You could add tool-specific configuration here for gobuster, ffuf, or sqlmap if needed.
             
             # Set timeout and sudo if applicable
             params["timeout"] = min(params.get("timeout", 180), 180)
@@ -508,6 +513,7 @@ class CybersecurityWorkflow:
                 state.task_manager = self.task_manager.to_dict()
                         
         return state
+
 
 
     def debug_scan_results(self, result: Any, task_id: str, tool_name: str) -> Any:
