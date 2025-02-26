@@ -89,7 +89,7 @@ def start_workflow(security_task, domains, ip_ranges):
             "ip_ranges": ip_ranges,
             "status": "Completed",
             "end_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "vulnerabilities": len(st.session_state.final_report.get("vulnerabilities", []))
+            "vulnerabilities": "N/A"
         }
         st.session_state.scan_history.append(history_entry)
         
@@ -123,60 +123,38 @@ def stop_workflow():
         st.session_state.is_running = False
 
 def generate_report():
-    """Generate a final report based on task execution"""
+    """Generate a final report based on task execution (fallback)"""
     if st.session_state.task_manager:
         tasks = st.session_state.task_manager.get_all_tasks()
+        total = len(tasks)
+        completed = sum(1 for t in tasks if t.status == TaskStatus.COMPLETED)
+        failed = sum(1 for t in tasks if t.status == TaskStatus.FAILED)
+        pending = sum(1 for t in tasks if t.status == TaskStatus.PENDING)
+        running = sum(1 for t in tasks if t.status == TaskStatus.RUNNING)
         
-        # Generate report with all task information
+        report_content = f"""# Security Assessment Report
+
+**Total Tasks:** {total}  
+**Completed Tasks:** {completed}  
+**Failed Tasks:** {failed}  
+**Pending Tasks:** {pending}  
+**Running Tasks:** {running}
+"""
         report = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "summary": {
-                "total_tasks": len(tasks),
-                "completed_tasks": sum(1 for t in tasks if t.status == TaskStatus.COMPLETED),
-                "failed_tasks": sum(1 for t in tasks if t.status == TaskStatus.FAILED),
-                "pending_tasks": sum(1 for t in tasks if t.status == TaskStatus.PENDING),
-                "running_tasks": sum(1 for t in tasks if t.status == TaskStatus.RUNNING),
-            },
-            "vulnerabilities": [],
-            "tasks": []
-        }
-        
-        # Add task details
-        for task in tasks:
-            error_str = ""
-            if hasattr(task, "errors") and task.errors:
-                error_str = ", ".join(task.errors)
-            task_details = {
-                "id": task.id,
-                "description": task.description,
-                "status": task.status.name,
-                "created_at": task.created_at.strftime("%Y-%m-%d %H:%M:%S") if task.created_at else None,
-                "started_at": task.started_at.strftime("%Y-%m-%d %H:%M:%S") if task.started_at else None,
-                "completed_at": task.completed_at.strftime("%Y-%m-%d %H:%M:%S") if task.completed_at else None,
-                "attempts": getattr(task, "retry_count", 0),
-                "result": task.result,
-                "error": error_str
+            "content": report_content,
+            "execution_summary": {
+                "total_tasks": total,
+                "completed_tasks": completed,
+                "failed_tasks": failed,
+                "pending_tasks": pending,
+                "running_tasks": running
             }
-            report["tasks"].append(task_details)
-            
-            # Check for vulnerabilities in task results (simple heuristic)
-            if task.status == TaskStatus.COMPLETED and task.result:
-                try:
-                    result_str = str(task.result).lower()
-                    if "vulnerability" in result_str or "open port" in result_str:
-                        report["vulnerabilities"].append({
-                            "task_id": task.id,
-                            "description": task.description,
-                            "details": str(task.result)
-                        })
-                except Exception:
-                    pass
-        
-        # Update the last scan history entry
+        }
         if st.session_state.scan_history:
             st.session_state.scan_history[-1]["status"] = "Completed"
             st.session_state.scan_history[-1]["end_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            st.session_state.scan_history[-1]["vulnerabilities"] = len(report["vulnerabilities"])
+            st.session_state.scan_history[-1]["vulnerabilities"] = "N/A"
         
         st.session_state.final_report = report
         return report
@@ -244,8 +222,6 @@ with st.sidebar:
                 st.write(f"**Start Time:** {entry['start_time']}")
                 if 'end_time' in entry:
                     st.write(f"**End Time:** {entry['end_time']}")
-                if 'vulnerabilities' in entry:
-                    st.write(f"**Vulnerabilities Found:** {entry['vulnerabilities']}")
                 st.write("**Domains:**")
                 for domain in entry['domains']:
                     st.write(f"- {domain}")
@@ -278,11 +254,8 @@ with tab1:
             st.metric(label="Task Progress", value="0/0")
     
     with col3:
-        if st.session_state.final_report:
-            st.metric(label="Vulnerabilities", 
-                      value=len(st.session_state.final_report.get("vulnerabilities", [])))
-        else:
-            st.metric(label="Vulnerabilities", value="0")
+        # Updated: vulnerabilities metric now shows "N/A" as the new report doesn't include it.
+        st.metric(label="Vulnerabilities", value="N/A")
     
     # Scope information
     st.subheader("Current Scope")
@@ -417,108 +390,42 @@ with tab4:
     if st.session_state.final_report:
         report = st.session_state.final_report
         
-        # Report header
-        st.subheader(f"Report Generated: {report['timestamp']}")
+        st.subheader(f"Report Generated: {report.get('timestamp', 'Unknown')}")
         
-        # Summary metrics
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Total Tasks", report["summary"]["total_tasks"])
-        with col2:
-            st.metric("Completed", report["summary"]["completed_tasks"])
-        with col3:
-            st.metric("Failed", report["summary"]["failed_tasks"])
-        with col4:
-            st.metric("Vulnerabilities", len(report["vulnerabilities"]))
+        # If an execution summary is available, display key metrics
+        if 'execution_summary' in report:
+            summary = report['execution_summary']
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Tasks", summary.get("total_tasks", "N/A"))
+            with col2:
+                st.metric("Completed", summary.get("completed_tasks", "N/A"))
+            with col3:
+                st.metric("Failed", summary.get("failed_tasks", "N/A"))
+            with col4:
+                st.metric("Pending", summary.get("pending_tasks", "N/A"))
         
-        # Vulnerabilities section
-        if report["vulnerabilities"]:
-            st.subheader("🚨 Vulnerabilities Found")
-            for i, vuln in enumerate(report["vulnerabilities"]):
-                with st.expander(f"Vulnerability #{i+1}: {vuln['description'][:50]}..."):
-                    st.write(f"**Task ID:** {vuln['task_id']}")
-                    st.write(f"**Description:** {vuln['description']}")
-                    st.code(vuln['details'])
-        else:
-            st.success("No vulnerabilities detected in this scan.")
-        
-        # Task details
-        st.subheader("Task Execution Details")
-        task_df = pd.DataFrame([
-            {
-                "ID": t["id"],
-                "Description": (t["description"][:50] + "...") if len(t["description"]) > 50 else t["description"],
-                "Status": t["status"],
-                "Attempts": t["attempts"],
-                "Completed At": t["completed_at"] if t["completed_at"] else "N/A"
-            }
-            for t in report["tasks"]
-        ])
-        
-        st.dataframe(task_df, use_container_width=True)
+        # Display the report content (Markdown)
+        st.markdown(report.get("content", "No report content available."))
         
         # Export options
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Export as JSON"):
-                report_json = json.dumps(report, indent=2)
-                st.download_button(
-                    label="Download JSON",
-                    data=report_json,
-                    file_name=f"security_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                    mime="application/json"
-                )
-        
+            report_json = json.dumps(report, indent=2)
+            st.download_button(
+                label="Download Report as JSON",
+                data=report_json,
+                file_name=f"security_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json"
+            )
         with col2:
-            if st.button("Export as Markdown"):
-                markdown_report = f"""# Security Audit Report
-Generated: {report['timestamp']}
-
-## Summary
-- Total Tasks: {report['summary']['total_tasks']}
-- Completed Tasks: {report['summary']['completed_tasks']}
-- Failed Tasks: {report['summary']['failed_tasks']}
-- Pending Tasks: {report['summary']['pending_tasks']}
-- Running Tasks: {report['summary']['running_tasks']}
-
-## Vulnerabilities Found: {len(report['vulnerabilities'])}
-"""
-                if report["vulnerabilities"]:
-                    for i, vuln in enumerate(report["vulnerabilities"]):
-                        markdown_report += f"""
-### Vulnerability #{i+1}: {vuln['description']}
-- Task ID: {vuln['task_id']}
-- Details:
-{vuln['details']}
-"""
-                else:
-                    markdown_report += "\nNo vulnerabilities detected in this scan.\n"
-                
-                markdown_report += "\n## Task Execution Details\n"
-                for task in report["tasks"]:
-                    markdown_report += f"""
-### Task {task['id']}: {task['description']}
-- Status: {task['status']}
-- Created: {task['created_at']}
-- Completed: {task['completed_at'] if task['completed_at'] else 'N/A'}
-- Attempts: {task['attempts']}
-"""
-                    if task['result']:
-                        markdown_report += f"""
-- Result:
-{task['result']}
-"""
-                    if task['error']:
-                        markdown_report += f"""
-- Error:
-{task['error']}
-"""
-                st.download_button(
-                    label="Download Markdown",
-                    data=markdown_report,
-                    file_name=f"security_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                    mime="text/markdown"
-                )
+            markdown_report = report.get("content", "No report content available.")
+            st.download_button(
+                label="Download Report as Markdown",
+                data=markdown_report,
+                file_name=f"security_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                mime="text/markdown"
+            )
     else:
         st.info("No report available. Complete a scan to generate a report.")
 

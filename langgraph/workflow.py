@@ -27,7 +27,6 @@ from utils.logger import setup_logger
 logger = logging.getLogger(__name__)
 
 # Define state schema
-# Define state schema
 class AgentState(BaseModel):
     objectives: List[str] = Field(default_factory=list)
     scope_validator: Dict[str, Any] = Field(default_factory=dict)
@@ -187,12 +186,12 @@ def extract_json_array(text: str) -> List[Dict[str, Any]]:
             return json_obj
     except json.JSONDecodeError:
         pass  # Continue with more robust parsing
-    
+
     # Use regex to find JSON-like structures
     # First, try to find a complete array [...] pattern
     array_pattern = re.compile(r'(\[[\s\S]*?\])', re.DOTALL)
     match = array_pattern.search(text)
-    
+
     if match:
         json_array_str = match.group(1).strip()
         logger.debug(f"Found potential JSON array: {json_array_str[:100]}...")
@@ -223,12 +222,12 @@ def extract_json_array(text: str) -> List[Dict[str, Any]]:
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse JSON array after cleaning: {e}")
             logger.debug(f"Problematic JSON: {cleaned_str}")
-    
+
     # If we're here, try a more aggressive approach - find each object separately
     logger.info("Attempting to extract individual JSON objects")
     object_pattern = re.compile(r'(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})', re.DOTALL)
     objects = object_pattern.findall(text)
-    
+
     if objects:
         result = []
         for obj_str in objects:
@@ -250,15 +249,15 @@ def extract_json_array(text: str) -> List[Dict[str, Any]]:
         if result:
             logger.info(f"Recovered {len(result)} individual JSON objects")
             return result
-    
+
     # Last resort: try to convert lines that look like YAML into JSON objects
     logger.info("Attempting YAML-like parsing as last resort")
     result = []
-    
+
     # Split by what appears to be separate tasks (looking for patterns like "- id:" or "1. id:")
     task_pattern = re.compile(r'(?:^|\n)(?:[-*]|\d+\.)\s+', re.MULTILINE)
     tasks = task_pattern.split(text)
-    
+
     for task_text in tasks:
         if not task_text.strip():
             continue
@@ -306,20 +305,16 @@ def extract_json_array(text: str) -> List[Dict[str, Any]]:
             if "id" not in obj:
                 obj["id"] = str(uuid.uuid4())
             result.append(obj)
-    
+
     if result:
         logger.info(f"Created {len(result)} tasks using YAML-like parsing")
         return result
-    
+
     # If we get here, we failed to extract anything useful
     logger.error("Failed to extract any JSON data from the text")
     raise ValueError("Could not extract valid JSON tasks from the response")
 
-class CybersecurityWorkflow:
-    """
-    Manages the LangGraph workflow for cybersecurity tasks.
-    """
-
+class CybersecurityWorkflow: 
     def __init__(self, llm=None):
         """Initialize the workflow with tools and LLM."""
         self.llm = llm or get_llm()
@@ -371,7 +366,7 @@ class CybersecurityWorkflow:
         workflow.add_edge("generate_report", END)
 
         # Increase the recursion limit by setting a custom attribute.
-        setattr(workflow, "recursion_limit", 50)
+        setattr(workflow, "recursion_limit", 100)
 
         return workflow
 
@@ -799,7 +794,6 @@ class CybersecurityWorkflow:
 
         return state
 
-        # Modify the _analyze_results method to handle large data better
     def _analyze_results(self, state: AgentState) -> AgentState:
         """Analyze the results of the executed task and optionally add follow-up tasks."""
         task_id = state.current_task_id
@@ -1343,7 +1337,7 @@ class CybersecurityWorkflow:
             compiled_workflow = self.workflow.compile()
             # Instead of passing recursion_limit to invoke(),
             # set the attribute on the compiled workflow.
-            compiled_workflow.recursion_limit = 50
+            compiled_workflow.recursion_limit = 100
 
             final_state = compiled_workflow.invoke(initial_state)
 
