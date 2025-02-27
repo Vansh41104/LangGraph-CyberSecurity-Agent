@@ -20,6 +20,89 @@ A comprehensive cybersecurity solution built using LangGraph, a powerful framewo
 
 - python33.8 or higher
 - Access to necessary API keys (configured in environment variables)
+- Security tools: nmap, gobuster, ffuf, sqlmap
+
+### Security Tools Installation
+
+#### Installing Nmap
+
+**On Linux (Debian/Ubuntu):**
+```bash
+sudo apt update
+sudo apt install nmap
+```
+
+**On macOS (using Homebrew):**
+```bash
+brew install nmap
+```
+
+**On Windows:**
+1. Download the installer from the [Nmap official website](https://nmap.org/download.html)
+2. Run the installer and follow the installation wizard
+3. Verify installation: `nmap --version`
+
+#### Installing Gobuster
+
+**On Linux (Debian/Ubuntu):**
+```bash
+sudo apt update
+sudo apt install gobuster
+```
+
+**Using Go (cross-platform):**
+```bash
+go install github.com/OJ/gobuster/v3@latest
+```
+
+**On macOS (using Homebrew):**
+```bash
+brew install gobuster
+```
+
+#### Installing ffuf (Fast Web Fuzzer)
+
+**Using Go (recommended for all platforms):**
+```bash
+go install github.com/ffuf/ffuf@latest
+```
+
+**Verify installation:**
+```bash
+ffuf -V
+```
+
+#### Installing SQLMap
+
+**On Linux (Debian/Ubuntu):**
+```bash
+sudo apt update
+sudo apt install sqlmap
+```
+
+**On macOS (using Homebrew):**
+```bash
+brew install sqlmap
+```
+
+**Using Python (cross-platform):**
+```bash
+git clone --depth 1 https://github.com/sqlmapproject/sqlmap.git
+cd sqlmap
+python3 sqlmap.py --version
+```
+
+#### Verifying Tool Installations
+
+After installing all tools, verify they're correctly installed and available in your PATH:
+
+```bash
+# Check versions
+nmap --version
+gobuster --version
+ffuf -V
+sqlmap --version
+```
 
 ### Setup
 
@@ -54,6 +137,9 @@ DEFAULT_IP_RANGES=192.168.1.0/24
 
 # Tool configurations
 NMAP_PATH=/usr/bin/nmap
+GOBUSTER_PATH=/usr/bin/gobuster
+FFUF_PATH=/usr/bin/ffuf
+SQLMAP_PATH=/usr/bin/sqlmap
 
 # Scan settings
 MAX_TASK_RETRIES=3
@@ -137,6 +223,9 @@ The agent can be configured through environment variables or a `.env` file:
 | `DEFAULT_DOMAINS` | Comma-separated list of domains to monitor | google.com |
 | `DEFAULT_IP_RANGES` | CIDR notation of IP ranges to scan | 192.168.1.0/24 |
 | `NMAP_PATH` | Path to the Nmap executable | /usr/bin/nmap |
+| `GOBUSTER_PATH` | Path to the Gobuster executable | /usr/bin/gobuster |
+| `FFUF_PATH` | Path to the ffuf executable | /usr/bin/ffuf |
+| `SQLMAP_PATH` | Path to the SQLMap executable | /usr/bin/sqlmap |
 | `MAX_TASK_RETRIES` | Maximum number of retry attempts for failed tasks | 3 |
 | `TASK_TIMEOUT` | Timeout for tasks in seconds | 300 |
 | `LOG_LEVEL` | Logging verbosity (DEBUG, INFO, WARNING, ERROR) | INFO |
@@ -168,16 +257,6 @@ python3 -m pytest tests/test_scope.py -v
 - For large networks, increase `TASK_TIMEOUT` to allow for complete scanning
 - Set `LOG_LEVEL` to DEBUG for troubleshooting but revert to INFO for production use
 - Consider hardware requirements based on network size and scanning frequency
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
 
 ## 📜 License
 

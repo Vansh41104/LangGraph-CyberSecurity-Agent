@@ -163,6 +163,7 @@ class NmapScanner:
             "full": "-sS -sV -sC -O",
             "comprehensive": "-sS -sV -sC -O -A",
             "vulnerability": "-sV --script=vuln",
+            "ssh_vulnerability": "-sV --script=ssh-*",
             "udp": "-sU",
             "stealth": "-sS",
             "tcp_connect": "-sT",

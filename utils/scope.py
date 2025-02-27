@@ -25,6 +25,7 @@ class ScopeValidator:
         
         If the domain starts with a dot, it will be treated as a wildcard and passed to add_wildcard_domain.
         """
+        domain = domain.lower().strip()
         if domain.startswith("."):
             self.add_wildcard_domain(domain)
         else:
@@ -36,6 +37,7 @@ class ScopeValidator:
         
         The wildcard should start with a dot (e.g. '.example.com').
         """
+        wildcard = wildcard.lower().strip()
         if not wildcard.startswith("."):
             wildcard = "." + wildcard
         self.wildcard_domains.append(wildcard)
@@ -45,8 +47,9 @@ class ScopeValidator:
         """Add a single IP to the allowed scope."""
         try:
             ip_obj = ipaddress.IPv4Address(ip)
-            self.allowed_ips.append(str(ip_obj))
-            logger.info(f"Added IP to scope: {ip}")
+            ip_str = str(ip_obj)
+            self.allowed_ips.append(ip_str)
+            logger.info(f"Added IP to scope: {ip_str}")
         except ValueError as e:
             logger.error(f"Invalid IP format: {ip}. Error: {str(e)}")
             raise ValueError(f"Invalid IP format: {ip}")
@@ -70,6 +73,7 @@ class ScopeValidator:
 
     def is_domain_in_scope(self, domain: str) -> bool:
         """Check if a domain is within the allowed scope."""
+        domain = domain.lower().strip()
         if domain in self.allowed_domains:
             return True
         for wildcard in self.wildcard_domains:
@@ -81,8 +85,9 @@ class ScopeValidator:
         """Check if an IP is within the allowed scope."""
         try:
             ip_obj = ipaddress.IPv4Address(ip)
+            ip_str = str(ip_obj)
             # Check for a direct IP match (if stored as a string)
-            if str(ip_obj) in self.allowed_ips:
+            if ip_str in self.allowed_ips:
                 return True
             # Check if IP falls within any allowed IP range
             for network in self.allowed_ips:
@@ -103,6 +108,13 @@ class ScopeValidator:
         Returns:
             bool: True if the target is within scope, False otherwise.
         """
+        target = target.lower().strip()
+        # Remove protocol, path, and port if present
+        if "://" in target:
+            target = target.split("://")[1]
+        target = target.split("/")[0]
+        target = target.split(":")[0]
+        
         # If the target looks like an IP (optionally with CIDR notation), check IP scope
         if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?$", target):
             ip = target.split('/')[0]  # Remove any CIDR notation for validation
@@ -159,16 +171,8 @@ class ScopeValidator:
             logger.warning(f"No target found in task: {task.get('name', 'unnamed')}")
             return False
 
-        # Clean the target by removing protocols, paths, and ports
-        if "://" in target:
-            target = target.split("://")[1]
-        target = target.split("/")[0]
-        target = target.split(":")[0]
-        
-        if not self.is_target_in_scope(target):
-            logger.warning(f"Target '{target}' is out of scope for task: {task.get('name', 'unnamed')}")
-            return False
-        return True
+        # Normalize and validate the target
+        return self.is_target_in_scope(target)
         
     def is_in_scope(self, target: str) -> bool:
         """

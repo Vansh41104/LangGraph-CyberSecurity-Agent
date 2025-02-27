@@ -1,7 +1,7 @@
 import json
 import logging
 import uuid
-from typing import Dict, List, Any, Tuple, Optional, Callable
+from typing import Dict, List, Any, Optional
 from pydantic import BaseModel, Field
 
 from langchain.prompts import ChatPromptTemplate
@@ -29,7 +29,15 @@ from utils.logger import setup_logger
 # Setup logger
 logger = logging.getLogger(__name__)
 
-# Updated task decomposition prompt to include multiple tools.
+# Helper function to truncate long text
+def truncate_text(text: str, max_length: int = 500) -> str:
+    if not isinstance(text, str):
+        text = str(text)
+    if len(text) > max_length:
+        return text[:max_length] + "..."
+    return text
+
+# (Existing prompt strings remain unchanged)
 TASK_DECOMPOSITION_PROMPT = '''
 You are an expert cybersecurity analyst. Break down the following high-level security objective into concrete tasks using the available security tools listed below.
 
@@ -108,7 +116,6 @@ IMPORTANT FORMATTING INSTRUCTIONS:
 7. Ensure all JSON syntax is correct (commas between objects, no trailing commas)
 '''
 
-
 RESULT_ANALYSIS_PROMPT = ''' You are an expert cybersecurity analyst. Review these scan results and determine follow-up actions.
 
     ORIGINAL TASK: {task} SCAN RESULTS: {results} CURRENT TASKS: {current_tasks} TARGET SCOPE: {scope}
@@ -137,7 +144,6 @@ RESULT_ANALYSIS_PROMPT = ''' You are an expert cybersecurity analyst. Review the
     Always include the "target" parameter in the params object
     Return an empty array [] if no new tasks are needed '''
 
-
 REPORT_GENERATION_PROMPT = ''' Please generate a complete security report based on the following information:
 
     OBJECTIVES: {"\n".join(state.objectives)}
@@ -155,9 +161,6 @@ REPORT_GENERATION_PROMPT = ''' Please generate a complete security report based 
     Key Findings
     Recommendations
     Technical Details '''
-
-
-
 
 def extract_json_array(text: str) -> List[Dict[str, Any]]: 
     """ Extracts a JSON array from text, handling various formats and common LLM formatting issues. """ 
@@ -237,10 +240,8 @@ class AgentState(BaseModel):
     def __setitem__(self, key, value):
         setattr(self, key, value)
 
-def get_llm(model="gemma2-9b-it", temperature=0): return ChatGroq(model=model, temperature=temperature)
-
-
-
+def get_llm(model="gemma2-9b-it", temperature=0): 
+    return ChatGroq(model=model, temperature=temperature)
 
 class CybersecurityWorkflow: 
     def __init__(self, llm=None):
@@ -285,7 +286,7 @@ class CybersecurityWorkflow:
         workflow.add_edge("execute_task", "analyze_results")
         workflow.add_edge("analyze_results", "select_next_task")
         workflow.add_edge("generate_report", END)
-        setattr(workflow, "recursion_limit", 100)
+        setattr(workflow, "recursion_limit", 10000)
         return workflow
 
     def _check_scope_condition(self, state: AgentState) -> bool:
@@ -313,24 +314,62 @@ class CybersecurityWorkflow:
         ip_ranges = self.scope_validator.ip_ranges
         scope_str = f"Domains: {', '.join(domains)}\nIP Ranges: {', '.join(map(str, ip_ranges))}"
 
-        # Create a fallback task if decomposition fails
+        # Use the first domain as fallback target
         fallback_target = self.scope_validator.domains[0] if self.scope_validator.domains else "example.com"
-        fallback_task = Task(
-            id="fallback-scan",
+        # If fallback_target does not have a protocol, add one for web tasks
+        web_target = fallback_target if fallback_target.startswith("http") else f"http://{fallback_target}"
+
+        # Create fallback tasks for each tool
+        fallback_tasks = []
+
+        # Fallback task for nmap (port scanning)
+        fallback_tasks.append(Task(
+            id="fallback-scan-nmap",
             name="Basic Port Scan",
             description="Basic port scan created when task decomposition failed",
             tool="nmap",
             params={"target": fallback_target, "scan_type": "syn", "ports": "1-1000"},
             depends_on=[]
-        )
+        ))
+
+        # Fallback task for gobuster (directory enumeration)
+        fallback_tasks.append(Task(
+            id="fallback-scan-gobuster",
+            name="Directory Enumeration",
+            description="Basic directory enumeration created when task decomposition failed",
+            tool="gobuster",
+            params={"target": web_target, "wordlist": "common.txt"},
+            depends_on=[]
+        ))
+
+        # Fallback task for ffuf (web fuzzing)
+        fallback_tasks.append(Task(
+            id="fallback-scan-ffuf",
+            name="Web Fuzzing for Endpoints",
+            description="Basic web fuzzing created when task decomposition failed",
+            tool="ffuf",
+            params={"target": f"{web_target}/FUZZ", "wordlist": "common.txt", "extensions": "php,html,txt"},
+            depends_on=[]
+        ))
+
+        # Fallback task for sqlmap (SQL injection testing)
+        fallback_tasks.append(Task(
+            id="fallback-scan-sqlmap",
+            name="SQL Injection Testing",
+            description="Basic SQL injection testing created when task decomposition failed",
+            tool="sqlmap",
+            params={"target": f"{web_target}/page.php?id=1", "level": 3, "risk": 2},
+            depends_on=[]
+        ))
 
         def add_fallback(message: str):
             logger.warning(message)
-            if not self.task_manager.has_task(fallback_task.id):
-                self.task_manager.add_task(fallback_task)
+            for task in fallback_tasks:
+                if not self.task_manager.has_task(task.id):
+                    self.task_manager.add_task(task)
 
         try:
-            # Build your prompt to strictly request valid JSON
+            # Build prompt to generate tasks from high-level objectives
             prompt = ChatPromptTemplate.from_messages([
                 SystemMessage(content=(
                     "You are a cybersecurity task planning assistant. "
@@ -346,13 +385,10 @@ class CybersecurityWorkflow:
             chain = prompt | self.llm
             raw_output_obj = chain.invoke({})
             raw_output = getattr(raw_output_obj, "content", str(raw_output_obj)) or ""
-
-            # 1. Strip potential code fences (```json ... ```).
-            # 2. Strip leading/trailing whitespace/newlines.
             import re
             raw_output_clean = raw_output.strip()
-            raw_output_clean = re.sub(r'^```(\w+)?', '', raw_output_clean)  # remove opening ``` or ```json
-            raw_output_clean = re.sub(r'```$', '', raw_output_clean)        # remove closing ```
+            raw_output_clean = re.sub(r'^```(\w+)?', '', raw_output_clean)
+            raw_output_clean = re.sub(r'```$', '', raw_output_clean)
 
             logger.debug(f"Raw LLM output after cleanup:\n{raw_output_clean}")
 
@@ -371,7 +407,6 @@ class CybersecurityWorkflow:
                 state.task_manager = self.task_manager.to_dict()
                 return state
 
-            # Process tasks, ensuring each is valid
             valid_tools = {"nmap", "gobuster", "ffuf", "sqlmap"}
             tasks_added = 0
 
@@ -380,7 +415,6 @@ class CybersecurityWorkflow:
                     logger.warning(f"Skipping invalid task data (not a dict): {task_data}")
                     continue
 
-                # Check required fields
                 missing_fields = [f for f in ("name", "description", "tool", "params") if f not in task_data]
                 if missing_fields:
                     logger.warning(f"Skipping task missing fields {missing_fields}: {task_data}")
@@ -396,7 +430,7 @@ class CybersecurityWorkflow:
                     logger.warning(f"Skipping task with invalid or missing 'target' in params: {params}")
                     continue
 
-                # Generate a unique ID if none is provided
+                # Generate a unique ID
                 task_id = str(uuid.uuid4())
                 new_task = Task(
                     id=task_id,
@@ -407,7 +441,6 @@ class CybersecurityWorkflow:
                     depends_on=task_data.get("depends_on", [])
                 )
 
-                # Check if target is in scope
                 target = params["target"]
                 if self.scope_validator.is_in_scope(target):
                     self.task_manager.add_task(new_task)
@@ -416,17 +449,18 @@ class CybersecurityWorkflow:
                     logger.warning(f"Skipping out-of-scope target: {target}")
 
             if tasks_added == 0:
-                add_fallback("No valid tasks were added; using fallback task.")
+                add_fallback("No valid tasks were added; using fallback tasks.")
             else:
                 logger.info(f"Created {tasks_added} tasks from objectives.")
 
         except Exception as e:
             logger.error(f"Error decomposing tasks: {e}")
             state.error_log.append(f"Error decomposing tasks: {e}")
-            add_fallback("Exception occurred during task decomposition; fallback task added.")
+            add_fallback("Exception occurred during task decomposition; fallback tasks added.")
 
         state.task_manager = self.task_manager.to_dict()
         return state
+
 
 
     def _get_next_executable_task(self) -> Optional[Task]:
@@ -505,37 +539,142 @@ class CybersecurityWorkflow:
             if "target" in params and isinstance(params["target"], str) and "," in params["target"]:
                 params["target"] = [t.strip() for t in params["target"].split(",")]
             
-            # For sqlmap, ensure we use 'target_url' instead of 'target'
+            # For gobuster, validate and ensure the wordlist exists
+            if task.tool == "gobuster" and "wordlist" in params:
+                # List of common wordlist paths to try if the specified one doesn't exist
+                wordlist_paths = [
+                    params["wordlist"],  # First try the user-specified wordlist
+                    "/usr/share/wordlists/gobuster/common.txt",
+                    "/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt",
+                    "/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt",
+                    "/usr/share/dirb/wordlists/common.txt"
+                ]
+                
+                # Find the first wordlist that exists
+                wordlist_found = False
+                for wordlist in wordlist_paths:
+                    if os.path.exists(wordlist):
+                        if wordlist != params["wordlist"]:
+                            logger.warning(f"Wordlist {params['wordlist']} not found, using {wordlist} instead")
+                        params["wordlist"] = wordlist
+                        wordlist_found = True
+                        break
+                
+                if not wordlist_found:
+                    raise ValueError(f"No valid wordlist found. Tried: {', '.join(wordlist_paths)}")
+                    
+                # Handle http_method parameter 
+                if "http_method" in params:
+                    method = params.pop("http_method")
+                    if "extra_args" in params:
+                        params["extra_args"] += f" -m {method}"
+                    else:
+                        params["extra_args"] = f"-m {method}"
+            
+            # For sqlmap, handle specific parameter transformations
             if task.tool == "sqlmap":
+                # Map 'target' to 'target_url'
                 if "target" in params:
                     params["target_url"] = params.pop("target")
+                
+                # Ensure URL has protocol
+                if "target_url" in params and not params["target_url"].startswith(('http://', 'https://')):
+                    params["target_url"] = f"http://{params['target_url']}"
+                
+                # Start with a simple scan first
+                extra_args = params.get("extra_args", "")
+                
+                # For initial execution, simplify the command to improve success chance
+                # Remove --dump-all and increase the timeout for the initial attempt
+                if getattr(task, 'retry_count', 0) == 0:
+                    # Don't use dump-all on first attempt
+                    if "--dump-all" in extra_args:
+                        extra_args = extra_args.replace("--dump-all", "")
+                    params["extra_args"] = extra_args
+                    
+                    # Set a higher timeout for the first attempt
+                    params["timeout"] = params.get("timeout", 300) + 120
+                    
+                    # On first attempt, just use --dbs to check for vulnerabilities without dumping
+                    if "dump-all" in params:
+                        del params["dump-all"]
+                    
+                    # Always include dbs flag for checking basic injection
+                    params["dbs"] = True
+                    
+                    logger.info("First sqlmap attempt: using simplified parameters to improve success chance")
+                else:
+                    # For retry attempts, increase verbosity to debug issues
+                    params["verbose"] = 3
+                    
+                # Properly handle SQLMap flag options
+                sqlmap_flags = ["dbs", "batch", "forms", "tables", "columns", "current-user", "current-db"]
+                for flag in sqlmap_flags:
+                    if flag in params:
+                        # If the parameter value is 'all' or True, set it to True to be treated as a flag
+                        if params[flag] == 'all' or params[flag] is True:
+                            params[flag] = True
             
-            # For nmap, process tool-specific parameters
+           # For nmap, process tool-specific parameters
             if task.tool == "nmap":
+                # Limit the ports range to 9000 if needed.
+                if "ports" in params:
+                    port_range = params["ports"]
+                    try:
+                        parts = port_range.split("-")
+                        if len(parts) == 2:
+                            start = int(parts[0])
+                            end = int(parts[1])
+                            if end > 9000:
+                                logger.info(f"Restricting port range from {port_range} to {start}-9000")
+                                params["ports"] = f"{start}-9000"
+                    except Exception as e:
+                        logger.warning(f"Failed to parse ports range '{port_range}': {e}")
+
                 # Map 'script_args' to 'arguments' if present
                 if "script_args" in params:
                     params["arguments"] = params.pop("script_args")
-                # If a "script" parameter is provided, append it as a --script option
+                
+                # Handle script parameter - fix for ssh-vuln script not found error
                 if "script" in params:
                     script_value = params.pop("script")
+                    # Convert both 'ssh-vuln' and 'ssh-enum' to 'ssh-*'
+                    if script_value in ["ssh-vuln", "ssh-enum"]:
+                        script_value = "ssh-*"
+                        logger.info("Converting '{}' to 'ssh-*' to run all SSH-related scripts".format(script_value))
                     if "arguments" in params:
                         params["arguments"] += f" --script={script_value}"
                     else:
                         params["arguments"] = f"--script={script_value}"
-                # Configure nmap scan type arguments
-                if "scan_type" not in params or params["scan_type"] == "syn":
+                
+                # Handle scan type parameter
+                if "scan_type" in params:
+                    # Special case for SSH vulnerability scanning
+                    if params["scan_type"] in ["ssh_vuln", "ssh_vulnerability"]:
+                        params["scan_type"] = "ssh_vulnerability"
+                        logger.info("Using predefined 'ssh_vulnerability' scan type")
+                    elif params["scan_type"] == "syn":
+                        if "arguments" in params:
+                            params["arguments"] += " -T4 --max-retries=2"
+                        else:
+                            params["arguments"] = "-T4 --max-retries=2"
+                else:
+                    # Default scan behavior
                     if "arguments" in params:
                         params["arguments"] += " -T4 --max-retries=2"
                     else:
                         params["arguments"] = "-T4 --max-retries=2"
+                
+                # Add version detection if requested
                 if task.params.get("version_detection", False):
                     if "arguments" in params:
                         params["arguments"] += " -sV --version-intensity=2"
                     else:
                         params["arguments"] = "-sV --version-intensity=2"
+
             
             # Set timeout and sudo if applicable
-            params["timeout"] = min(params.get("timeout", 180), 180)
+            params["timeout"] = min(params.get("timeout", 180), 300)  # Increase max timeout to 5 minutes
             if "sudo" in params and hasattr(tool, "sudo"):
                 tool.sudo = params.pop("sudo")
             
@@ -560,6 +699,14 @@ class CybersecurityWorkflow:
                     task.status = TaskStatus.RETRYING
                     retry_delay = min(2 ** task.retry_count, 60)
                     logger.info(f"Retrying task {task.id} ({task.name}) in {retry_delay}s, attempt {task.retry_count}")
+                    
+                    # For retry attempts with SQLMap, try a more conservative approach
+                    if task.tool == "sqlmap" and task.retry_count == 1:
+                        # Set a very basic scan for the retry
+                        task.params["risk"] = "1"  # Lower risk level
+                        task.params["level"] = "1"  # Lower detection level
+                        task.params.pop("dump-all", None)  # Remove dump-all
+                        logger.info("Adjusting SQLMap parameters for retry to use more conservative settings")
             state.error_log.append(error_msg)
             
         finally:
@@ -568,9 +715,6 @@ class CybersecurityWorkflow:
                 state.task_manager = self.task_manager.to_dict()
                         
         return state
-
-
-
 
     def debug_scan_results(self, result: Any, task_id: str, tool_name: str) -> Any:
         try:
@@ -762,84 +906,87 @@ class CybersecurityWorkflow:
 
     def _analyze_results_with_chunking(self, state: AgentState, task: Task, results: Any) -> AgentState:
         try:
-            # Create summaries for analysis
+            # Create summaries for analysis and truncate if too long
             results_summary = self._create_result_summary(results)
+            results_summary = truncate_text(str(results_summary), 500)
             
-            current_tasks_summary = []
-            for t in self.task_manager.get_all_tasks():
-                current_tasks_summary.append({
-                    "id": t.id,
-                    "name": t.name,
-                    "description": t.description,
-                    "tool": t.tool,
-                    "status": t.status.value
-                })
-                
+            # Create a concise summary of current tasks (using a simple count)
+            total_tasks = len(self.task_manager.get_all_tasks())
+            current_tasks_summary = f"Total tasks: {total_tasks}"
+            
+            # Build and truncate the scope string
             scope_str = "Domains: " + ", ".join(
                 self.scope_validator.domains + self.scope_validator.wildcard_domains
             )
             scope_str += "\nIP Ranges: " + ", ".join(str(ip_range) for ip_range in self.scope_validator.ip_ranges)
+            scope_str = truncate_text(scope_str, 300)
             
-            # High-level analysis prompt
+            # Create a shortened version of the original task details
+            task_summary = {
+                "name": task.name,
+                "tool": task.tool,
+                "params": task.params
+            }
+            task_summary_str = truncate_text(str(task_summary), 300)
+            
+            # High-level analysis prompt with truncated information
             high_level_prompt = ChatPromptTemplate.from_messages([
                 SystemMessage(content="You are a cybersecurity analyst reviewing scan results. Provide a concise analysis."),
                 HumanMessage(content=f"""
-        Analyze these scan results summary to identify key security findings:
+                    Analyze these scan results summary to identify key security findings:
 
-        ORIGINAL TASK: {task.to_dict()}
-        SCAN RESULTS SUMMARY: {results_summary}
-        TARGET SCOPE: {scope_str}
+                    ORIGINAL TASK: {task_summary_str}
+                    SCAN RESULTS SUMMARY: {results_summary}
+                    TARGET SCOPE: {scope_str}
 
-        Respond with the 3-5 most important security observations in bullet points.
-        """)
+                    Respond with the 3-5 most important security observations in bullet points.
+                """)
             ])
-            
-            # Get high-level analysis
             chain = high_level_prompt | self.llm
             high_level_analysis = chain.invoke({})
             high_level_text = high_level_analysis.content if hasattr(high_level_analysis, "content") else str(high_level_analysis)
+            high_level_text = truncate_text(high_level_text, 300)
             
-            # Followup tasks prompt
+            # Followup tasks prompt with truncated details
             followup_prompt = ChatPromptTemplate.from_messages([
                 SystemMessage(content="You are a cybersecurity analyst who responds ONLY with valid JSON."),
                 HumanMessage(content=f"""
-        Based on these scan findings, determine if any follow-up tasks are needed.
+                    Based on these scan findings, determine if any follow-up tasks are needed.
 
-        ORIGINAL TASK: {task.to_dict()}
-        HIGH-LEVEL FINDINGS: {high_level_text}
-        CURRENT TASKS: {current_tasks_summary}
-        TARGET SCOPE: {scope_str}
+                    ORIGINAL TASK: {task_summary_str}
+                    HIGH-LEVEL FINDINGS: {high_level_text}
+                    CURRENT TASKS: {current_tasks_summary}
+                    TARGET SCOPE: {scope_str}
 
-        IMPORTANT: Your ENTIRE response must be a valid JSON array, even if empty.
+                    IMPORTANT: Your ENTIRE response must be a valid JSON array, even if empty.
 
-        If new tasks are needed, return JSON in this EXACT format:
-        [
-        {{
-            "id": "unique_task_id",
-            "name": "Short task name",
-            "description": "Detailed description",
-            "tool": "nmap", 
-            "params": {{"target": "domain.com", "scan_type": "syn", "ports": "1-1000"}}
-        }}
-        ]
+                    If new tasks are needed, return JSON in this EXACT format:
+                    [
+                    {{
+                        "id": "unique_task_id",
+                        "name": "Short task name",
+                        "description": "Detailed description",
+                        "tool": "nmap", 
+                        "params": {{"target": "domain.com", "scan_type": "syn", "ports": "1-1000"}}
+                    }}
+                    ]
 
-        If no new tasks are needed, return EXACTLY:
-        []
+                    If no new tasks are needed, return EXACTLY:
+                    []
 
-        Rules:
-        1. Only tasks that use one of the following tools: "nmap", "gobuster", "ffuf", or "sqlmap"
-        2. Every task MUST have all fields shown above
-        3. The "params" object MUST include "target"
-        4. NO explanation text before or after the JSON
-        5. Only suggest reasonable follow-up tasks based on the findings
-        6. Ensure targets are within the specified scope
-        """)
+                    Rules:
+                    1. Only tasks that use one of the following tools: "nmap", "gobuster", "ffuf", or "sqlmap"
+                    2. Every task MUST have all fields shown above
+                    3. The "params" object MUST include "target"
+                    4. NO explanation text before or after the JSON
+                    5. Only suggest reasonable follow-up tasks based on the findings
+                    6. Ensure targets are within the specified scope
+                """)
             ])
-            
-            # Get followup tasks
             chain = followup_prompt | self.llm
             followup_result = chain.invoke({})
             followup_text = followup_result.content if hasattr(followup_result, "content") else str(followup_result)
+            followup_text = truncate_text(followup_text, 500)
             
             # Store analysis in task result
             if task.result:
@@ -864,7 +1011,6 @@ class CybersecurityWorkflow:
             except Exception as e:
                 logger.warning(f"Error processing follow-up tasks: {str(e)}")
                 state.error_log.append(f"Follow-up task error: {str(e)}")
-                # Continue execution even if follow-up task processing fails
         except Exception as e:
             error_msg = f"Error analyzing results: {str(e)}"
             logger.error(error_msg)
@@ -917,8 +1063,8 @@ class CybersecurityWorkflow:
         if not new_tasks or len(new_tasks) == 0:
             logger.info("No new tasks needed based on result analysis")
             return
-        existing_count = len(self.task_manager.get_all_tasks())
-        remaining_slots = max(0, 10 - existing_count)
+        existing_tasks = self.task_manager.get_all_tasks()
+        remaining_slots = max(0, 10 - len(existing_tasks))
         if remaining_slots <= 0:
             logger.info("Task limit reached (10 tasks). No new tasks will be added.")
             return
@@ -927,7 +1073,7 @@ class CybersecurityWorkflow:
         for task_data in new_tasks[:remaining_slots]:
             if not isinstance(task_data, dict):
                 continue
-            required_fields = ["name", "description", "tool", "params"]  # Removed "id" from required fields
+            required_fields = ["name", "description", "tool", "params"]
             if not all(field in task_data for field in required_fields):
                 continue
             if task_data["tool"] not in ["nmap", "gobuster", "ffuf", "sqlmap"]:
@@ -935,10 +1081,17 @@ class CybersecurityWorkflow:
             params = task_data.get("params", {})
             if not isinstance(params, dict) or "target" not in params:
                 continue
-            # Generate a UUID if id is not provided or is invalid
+            # Check for duplicates: if a task with the same name, tool, and target already exists, skip it
+            duplicate = any(
+                t.name == task_data["name"] and 
+                t.tool == task_data["tool"] and 
+                t.params.get("target") == params.get("target")
+                for t in existing_tasks
+            )
+            if duplicate:
+                continue
+            # Always generate a new unique ID regardless of any provided ID
             task_id = str(uuid.uuid4())
-            if "id" in task_data and isinstance(task_data["id"], str) and task_data["id"].strip():
-                task_id = task_data["id"]
             new_task = Task(
                 id=task_id,
                 name=task_data.get("name", ""),
@@ -947,13 +1100,13 @@ class CybersecurityWorkflow:
                 description=task_data.get("description", ""),
                 depends_on=task_data.get("depends_on", [])
             )
-
             target = params.get("target", "")
             if target and self.scope_validator.is_in_scope(target):
                 self.task_manager.add_task(new_task)
                 tasks_added += 1
         logger.info(f"Added {tasks_added} new tasks based on analysis")
         state.task_manager = self.task_manager.to_dict()
+
 
     def _generate_report(self, state: AgentState) -> AgentState:
         logger.info("Generating final security report")
@@ -1179,8 +1332,8 @@ class CybersecurityWorkflow:
         logger.info(f"Starting cybersecurity workflow with objectives: {objectives}")
         try:
             compiled_workflow = self.workflow.compile()
-            compiled_workflow.recursion_limit = 1000
-            final_state = compiled_workflow.invoke(initial_state)
+            compiled_workflow.recursion_limit = 10000
+            final_state = compiled_workflow.invoke(initial_state, config={"recursion_limit": 50})
 
             if "results" not in final_state:
                 final_state["results"] = {}

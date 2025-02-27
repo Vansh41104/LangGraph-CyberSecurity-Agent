@@ -16,3 +16,4 @@ python-dotenv>=1.0.0
 ipaddress>=1.0.23
 typing-extensions>=4.7.0
 pytest>=7.4.0
+sqlmap>=1.5.0

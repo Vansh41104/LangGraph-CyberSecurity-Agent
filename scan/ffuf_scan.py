@@ -47,6 +47,7 @@ class FFUFScanner:
         self,
         target: str,
         wordlist: str,
+        extensions: Optional[str],
         threads: int,
         extra_args: str,
         output_file: str,
@@ -58,6 +59,7 @@ class FFUFScanner:
         Args:
             target: Target URL with FUZZ placeholder (e.g., http://example.com/FUZZ).
             wordlist: Path to wordlist file.
+            extensions: Comma-separated list of file extensions (optional).
             threads: Number of threads.
             extra_args: Additional arguments.
             output_file: Path to store output.
@@ -72,6 +74,9 @@ class FFUFScanner:
         cmd.append(self.binary_path)
         cmd.extend(["-u", target])
         cmd.extend(["-w", wordlist])
+        # Use '-e' for file extensions.
+        if extensions:
+            cmd.extend(["-e", extensions])
         cmd.extend(["-t", str(threads)])
         cmd.extend(["-of", output_format, "-o", output_file])
         if extra_args:
@@ -83,6 +88,7 @@ class FFUFScanner:
         self,
         target: str,
         wordlist: str,
+        extensions: Optional[str] = None,
         threads: int = 10,
         extra_args: str = "",
         timeout: int = 300,
@@ -94,6 +100,7 @@ class FFUFScanner:
         Args:
             target: URL with FUZZ placeholder.
             wordlist: Path to wordlist.
+            extensions: Comma-separated file extensions (optional).
             threads: Number of threads.
             extra_args: Additional ffuf arguments.
             timeout: Timeout in seconds.
@@ -102,11 +109,31 @@ class FFUFScanner:
         Returns:
             Parsed scan results as dictionary.
         """
+        # Check if the specified wordlist exists; if not, try fallback paths.
+        if not os.path.exists(wordlist):
+            fallback_paths = [
+                wordlist,
+                "/usr/share/wordlists/gobuster/common.txt",
+                "/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt",
+                "/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt",
+                "/usr/share/dirb/wordlists/common.txt"
+            ]
+            fallback_wordlist = None
+            for candidate in fallback_paths:
+                if os.path.exists(candidate):
+                    fallback_wordlist = candidate
+                    logger.warning(f"Wordlist {wordlist} not found, using {candidate} instead")
+                    break
+            if fallback_wordlist:
+                wordlist = fallback_wordlist
+            else:
+                raise RuntimeError(f"Wordlist {wordlist} not found and no fallback available")
+        
         with tempfile.NamedTemporaryFile(prefix="ffuf_scan_", suffix=".json", delete=False) as tmp_file:
             output_path = tmp_file.name
 
         try:
-            cmd = self._build_command(target, wordlist, threads, extra_args, output_path, output_format)
+            cmd = self._build_command(target, wordlist, extensions, threads, extra_args, output_path, output_format)
             command_str = " ".join(cmd)
             logger.info(f"Executing ffuf scan: {command_str}")
             process = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)

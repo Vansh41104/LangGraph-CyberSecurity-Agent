@@ -93,10 +93,11 @@ class GobusterScanner:
         extra_args: str = "",
         timeout: int = 300,
         output_format: str = "json",
+        http_method: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run a gobuster scan against the target.
-
+        
         Args:
             target: The URL target.
             wordlist: Path to wordlist file.
@@ -105,11 +106,21 @@ class GobusterScanner:
             extra_args: Additional gobuster arguments.
             timeout: Timeout in seconds.
             output_format: Format for output, defaults to json.
+            http_method: HTTP method to use (GET, POST, etc.)
 
         Returns:
             Parsed scan results as dictionary.
         """
-        output_path = None  # Initialize to None before the with block.
+        # Add http_method to extra_args if provided
+        if http_method:
+            extra_args += f" -m {http_method}"
+        
+        # Ensure the target URL is properly formatted with http:// or https://
+        if not target.startswith(('http://', 'https://')):
+            target = f"http://{target}"
+            logger.info(f"Prepending http:// to target: {target}")
+        
+        output_path = None  # Initialize before the with block.
         with tempfile.NamedTemporaryFile(prefix="gobuster_scan_", suffix=".json", delete=False) as tmp_file:
             output_path = tmp_file.name
 
@@ -118,16 +129,48 @@ class GobusterScanner:
             command_str = " ".join(cmd)
             logger.info(f"Executing gobuster scan: {command_str}")
             process = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            
+            # Always log stdout and stderr regardless of return code
+            logger.debug(f"Gobuster stdout: {process.stdout}")
+            logger.debug(f"Gobuster stderr: {process.stderr}")
+            
             if process.returncode != 0:
                 error_msg = f"Gobuster scan failed with code {process.returncode}: {process.stderr}"
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
-            with open(output_path, "r") as f:
-                results = json.load(f)
+            
+            results = None
+            # Check if output file exists and has content
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                try:
+                    with open(output_path, "r") as f:
+                        results = json.load(f)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse JSON output from file: {e}")
+            else:
+                logger.warning(f"Output file empty or missing: {output_path}")
+                # Fallback: attempt to parse stdout if available
+                if process.stdout and process.stdout.strip():
+                    try:
+                        results = json.loads(process.stdout)
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse JSON output from stdout: {e}")
+            
+            if results is None:
+                # If still no valid JSON, return an empty results structure
+                results = {
+                    "results": [],
+                    "error": "Empty or missing output file",
+                    "raw_stdout": process.stdout,
+                    "raw_stderr": process.stderr
+                }
+            
             results.update({
                 "command": command_str,
                 "stdout": process.stdout,
                 "stderr": process.stderr,
+                "target": target,
+                "wordlist": wordlist
             })
             return results
         except subprocess.TimeoutExpired:
