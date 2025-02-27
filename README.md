@@ -165,7 +165,7 @@ python3 main.py -t "Scan <Domain Name> for open ports" -d <Domain Name>
 The project includes example scripts that demonstrate various functionalities:
 
 ```bash
-sh run_examples.sh
+sh run.sh
 ```
 
 ### Streamlit Interface
