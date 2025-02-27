@@ -229,11 +229,61 @@ with st.sidebar:
                 for ip_range in entry['ip_ranges']:
                     st.write(f"- {ip_range}")
 
-# Main content area with tabs
-tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "Task List", "Logs", "Report"])
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# Reordering Tabs so that the "Security Audit Report" is first:
+# ─────────────────────────────────────────────────────────────────────────────────────────
+tab_report, tab_dashboard, tab_tasks, tab_logs = st.tabs(
+    ["Security Audit Report", "Dashboard", "Task List", "Logs"]
+)
 
-# Dashboard Tab
-with tab1:
+# 1) Report Tab (was tab4 originally)
+with tab_report:
+    st.header("Security Audit Report")
+    
+    if st.session_state.final_report:
+        report = st.session_state.final_report
+        
+        st.subheader(f"Report Generated: {report.get('timestamp', 'Unknown')}")
+        
+        # If an execution summary is available, display key metrics
+        if 'execution_summary' in report:
+            summary = report['execution_summary']
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Tasks", summary.get("total_tasks", "N/A"))
+            with col2:
+                st.metric("Completed", summary.get("completed_tasks", "N/A"))
+            with col3:
+                st.metric("Failed", summary.get("failed_tasks", "N/A"))
+            with col4:
+                st.metric("Pending", summary.get("pending_tasks", "N/A"))
+        
+        # Display the report content (Markdown)
+        st.markdown(report.get("content", "No report content available."))
+        
+        # Export options
+        col1, col2 = st.columns(2)
+        with col1:
+            report_json = json.dumps(report, indent=2)
+            st.download_button(
+                label="Download Report as JSON",
+                data=report_json,
+                file_name=f"security_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json"
+            )
+        with col2:
+            markdown_report = report.get("content", "No report content available.")
+            st.download_button(
+                label="Download Report as Markdown",
+                data=markdown_report,
+                file_name=f"security_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                mime="text/markdown"
+            )
+    else:
+        st.info("No report available. Complete a scan to generate a report.")
+
+# 2) Dashboard Tab (was tab1 originally)
+with tab_dashboard:
     st.header("Cybersecurity Pipeline Dashboard")
     
     # Status indicators
@@ -304,8 +354,8 @@ with tab1:
         
         st.bar_chart(df.set_index("Status"))
 
-# Task List Tab
-with tab2:
+# 3) Task List Tab (was tab2 originally)
+with tab_tasks:
     st.header("Task List")
     
     if st.session_state.task_manager:
@@ -350,8 +400,8 @@ with tab2:
     else:
         st.info("No tasks available. Start a scan to generate tasks.")
 
-# Logs Tab
-with tab3:
+# 4) Logs Tab (was tab3 originally)
+with tab_logs:
     st.header("Execution Logs")
     
     # Filter logs by level
@@ -382,52 +432,6 @@ with tab3:
     
     if st.button("Refresh Logs"):
         st.experimental_rerun()
-
-# Report Tab
-with tab4:
-    st.header("Security Audit Report")
-    
-    if st.session_state.final_report:
-        report = st.session_state.final_report
-        
-        st.subheader(f"Report Generated: {report.get('timestamp', 'Unknown')}")
-        
-        # If an execution summary is available, display key metrics
-        if 'execution_summary' in report:
-            summary = report['execution_summary']
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Total Tasks", summary.get("total_tasks", "N/A"))
-            with col2:
-                st.metric("Completed", summary.get("completed_tasks", "N/A"))
-            with col3:
-                st.metric("Failed", summary.get("failed_tasks", "N/A"))
-            with col4:
-                st.metric("Pending", summary.get("pending_tasks", "N/A"))
-        
-        # Display the report content (Markdown)
-        st.markdown(report.get("content", "No report content available."))
-        
-        # Export options
-        col1, col2 = st.columns(2)
-        with col1:
-            report_json = json.dumps(report, indent=2)
-            st.download_button(
-                label="Download Report as JSON",
-                data=report_json,
-                file_name=f"security_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json"
-            )
-        with col2:
-            markdown_report = report.get("content", "No report content available.")
-            st.download_button(
-                label="Download Report as Markdown",
-                data=markdown_report,
-                file_name=f"security_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                mime="text/markdown"
-            )
-    else:
-        st.info("No report available. Complete a scan to generate a report.")
 
 # Footer
 st.markdown("---")
