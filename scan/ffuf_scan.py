@@ -74,8 +74,8 @@ class FFUFScanner:
         cmd.append(self.binary_path)
         cmd.extend(["-u", target])
         cmd.extend(["-w", wordlist])
-        # Use '-e' for file extensions.
-        if extensions:
+        # If the target is meant for directory enumeration (ends with FUZZ), do not include extensions.
+        if extensions and not target.rstrip("/").endswith("FUZZ"):
             cmd.extend(["-e", extensions])
         cmd.extend(["-t", str(threads)])
         cmd.extend(["-of", output_format, "-o", output_file])
@@ -100,7 +100,7 @@ class FFUFScanner:
         Args:
             target: URL with FUZZ placeholder.
             wordlist: Path to wordlist.
-            extensions: Comma-separated file extensions (optional).
+            extensions: Comma-separated list of file extensions (optional).
             threads: Number of threads.
             extra_args: Additional ffuf arguments.
             timeout: Timeout in seconds.
@@ -109,7 +109,7 @@ class FFUFScanner:
         Returns:
             Parsed scan results as dictionary.
         """
-        # Check if the specified wordlist exists; if not, try fallback paths.
+        # Check if the specified wordlist exists; if not, use fallback paths.
         if not os.path.exists(wordlist):
             fallback_paths = [
                 wordlist,

@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11+-green)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-A comprehensive cybersecurity solution built using LangGraph, a powerful framework for constructing stateful, multi-agent applications with Large Language Models (LLMs). This agent serves as your security sentinel, continuously monitoring and protecting your systems against potential threats.
+A comprehensive cybersecurity solution built using LangGraph, a powerful framework for constructing stateful, multi-agent applications with Large Language Models (LLMs). This agent serves as your security sentinel, continuously monitoring and protecting your systems against potential threats. It takes ```2 mins for now as it is running all the 4 scans(nmap, gobuster, ffuf, sqlmap).```
 
 ## ✨ Features
 
