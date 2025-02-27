@@ -77,34 +77,6 @@ class NmapScanner:
             cmd.append(target)
         return cmd
 
-    def _get_arguments_for_scan_type(self, scan_type: str, default_args: str) -> str:
-        """
-        Get appropriate arguments for the specified scan type.
-
-        Args:
-            scan_type: Type of scan to perform.
-            default_args: Default arguments if scan_type is not recognized.
-
-        Returns:
-            String of nmap arguments.
-        """
-        scan_types = {
-            "quick": "-sn",
-            "ping": "-sn",
-            "service": "-sV -sC",
-            "version": "-sV",
-            "script": "-sC",
-            "full": "-sS -sV -sC -O",
-            "comprehensive": "-sS -sV -sC -O -A",
-            "vulnerability": "-sV --script=vuln",
-            "udp": "-sU",
-            "stealth": "-sS",
-            "tcp_connect": "-sT",
-            "os_detection": "-O",
-            "syn": "-T4 --max-retries=2"  # Added for compatibility with workflow defaults.
-        }
-        return scan_types.get(scan_type.lower(), default_args)
-
     @retry_operation(
         max_retries=2, retry_exceptions=(subprocess.TimeoutExpired, RuntimeError)
     )
@@ -126,7 +98,7 @@ class NmapScanner:
             arguments: Additional nmap arguments (default: "-sV -sC").
             command: Alternate scan command to use (overrides arguments if provided).
             timeout: Timeout for the scan in seconds.
-            scan_type: Type of scan to perform (e.g., "quick", "service", "vulnerability", "syn").
+            scan_type: Type of scan to perform (e.g., "quick", "service", "vulnerability").
 
         Returns:
             dict: Parsed scan results.
@@ -170,6 +142,33 @@ class NmapScanner:
                 os.unlink(xml_output_path)
             except Exception as e:
                 logger.warning(f"Failed to remove temporary file {xml_output_path}: {e}")
+
+    def _get_arguments_for_scan_type(self, scan_type: str, default_args: str) -> str:
+        """
+        Get appropriate arguments for the specified scan type.
+
+        Args:
+            scan_type: Type of scan to perform.
+            default_args: Default arguments if scan_type is not recognized.
+
+        Returns:
+            String of nmap arguments.
+        """
+        scan_types = {
+            "quick": "-sn",
+            "ping": "-sn",
+            "service": "-sV -sC",
+            "version": "-sV",
+            "script": "-sC",
+            "full": "-sS -sV -sC -O",
+            "comprehensive": "-sS -sV -sC -O -A",
+            "vulnerability": "-sV --script=vuln",
+            "udp": "-sU",
+            "stealth": "-sS",
+            "tcp_connect": "-sT",
+            "os_detection": "-O",
+        }
+        return scan_types.get(scan_type.lower(), default_args)
 
     def _parse_xml_output(self, xml_file: str) -> Dict[str, Any]:
         """
@@ -225,6 +224,7 @@ class NmapScanner:
                 for extraports in ports_elem.findall("extraports"):
                     host_data.setdefault("extraports", []).append(extraports.attrib)
                 for port in ports_elem.findall("port"):
+                    # Instead of storing the full attrib dict, extract specific keys:
                     port_data = {
                         "id": port.attrib.get("portid", "unknown"),
                         "protocol": port.attrib.get("protocol", "unknown"),
@@ -311,7 +311,7 @@ class NmapScanner:
             for port in host.get("ports", []):
                 state = port.get("state", {}).get("state")
                 if state == "open":
-                    port_number = port.get("id")
+                    port_number = port.get("id")  # Now this is directly the portid string
                     protocol = port.get("protocol")
                     service_data = port.get("service", {})
                     port_info = {

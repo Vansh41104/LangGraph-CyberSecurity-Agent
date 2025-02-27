@@ -74,7 +74,8 @@ class SQLMapScanner:
         self,
         target_url: str,
         extra_args: str = "",
-        timeout: int = 600
+        timeout: int = 600,
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Run a sqlmap scan against a target URL.
@@ -83,12 +84,26 @@ class SQLMapScanner:
             target_url: The URL to test for SQL injection.
             extra_args: Additional sqlmap arguments.
             timeout: Timeout in seconds.
+            **kwargs: Additional sqlmap parameters (e.g., dbs, risk) that will be converted to command-line options.
 
         Returns:
             Dictionary with scan results (text output and metadata).
         """
         with tempfile.TemporaryDirectory(prefix="sqlmap_output_") as output_dir:
             try:
+                # Process additional kwargs as sqlmap parameters
+                additional_args = []
+                for key, value in kwargs.items():
+                    if value is not None:
+                        additional_args.append(f"--{key}={value}")
+                
+                # Combine with extra_args
+                if additional_args:
+                    if extra_args:
+                        extra_args += " " + " ".join(additional_args)
+                    else:
+                        extra_args = " ".join(additional_args)
+                
                 cmd = self._build_command(target_url, extra_args, output_dir)
                 command_str = " ".join(cmd)
                 logger.info(f"Executing sqlmap scan: {command_str}")

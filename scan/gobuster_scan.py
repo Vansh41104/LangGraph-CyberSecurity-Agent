@@ -109,6 +109,7 @@ class GobusterScanner:
         Returns:
             Parsed scan results as dictionary.
         """
+        output_path = None  # Initialize to None before the with block.
         with tempfile.NamedTemporaryFile(prefix="gobuster_scan_", suffix=".json", delete=False) as tmp_file:
             output_path = tmp_file.name
 
@@ -133,7 +134,8 @@ class GobusterScanner:
             logger.error(f"Gobuster scan timed out after {timeout} seconds")
             raise RuntimeError(f"Scan timed out after {timeout} seconds")
         finally:
-            try:
-                os.unlink(output_path)
-            except Exception as e:
-                logger.warning(f"Failed to remove temporary file {output_path}: {e}")
+            if output_path is not None:
+                try:
+                    os.unlink(output_path)
+                except Exception as e:
+                    logger.warning(f"Failed to remove temporary file {output_path}: {e}")
