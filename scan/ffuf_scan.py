@@ -73,7 +73,6 @@ class FFUFScanner:
         cmd.extend(["-u", target])
         cmd.extend(["-w", wordlist])
         cmd.extend(["-t", str(threads)])
-        # Set output format and file for structured parsing.
         cmd.extend(["-of", output_format, "-o", output_file])
         if extra_args:
             cmd.extend(shlex.split(extra_args))

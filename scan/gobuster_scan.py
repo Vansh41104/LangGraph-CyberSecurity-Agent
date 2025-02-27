@@ -78,7 +78,6 @@ class GobusterScanner:
         if extensions:
             cmd.extend(["-x", extensions])
         cmd.extend(["-t", str(threads)])
-        # Request JSON output for easier parsing.
         cmd.extend(["-of", output_format, "-o", output_file])
         if extra_args:
             cmd.extend(shlex.split(extra_args))
@@ -122,7 +121,6 @@ class GobusterScanner:
                 error_msg = f"Gobuster scan failed with code {process.returncode}: {process.stderr}"
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
-            # Parse JSON output
             with open(output_path, "r") as f:
                 results = json.load(f)
             results.update({

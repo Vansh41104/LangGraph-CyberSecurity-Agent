@@ -3,15 +3,14 @@ import tempfile
 import os
 import logging
 import shlex
-import json
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, Optional, Union
 from utils.retry import retry_operation
 
 logger = logging.getLogger(__name__)
 
 class SQLMapScanner:
     """
-    Wrapper for sqlmap to test for SQL injection vulnerabilities and extract data.
+    Wrapper for sqlmap to test for SQL injection vulnerabilities.
     """
 
     def __init__(self, binary_path: str = "sqlmap", sudo: bool = False):
@@ -35,76 +34,66 @@ class SQLMapScanner:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             if result.returncode != 0:
                 raise RuntimeError(
-                    f"sqlmap verification failed with code {result.returncode}: {result.stderr.strip()}"
+                    f"SQLMap verification failed with code {result.returncode}: {result.stderr.strip()}"
                 )
-            version_info = result.stdout.splitlines()[0]
-            logger.info(f"sqlmap version: {version_info}")
+            version_line = result.stdout.splitlines()[0]
+            logger.info(f"SQLMap version: {version_line}")
         except (subprocess.SubprocessError, FileNotFoundError) as e:
-            logger.error(f"sqlmap installation verification failed: {e}")
-            raise RuntimeError(f"sqlmap is not installed or accessible: {e}")
+            logger.error(f"SQLMap installation verification failed: {e}")
+            raise RuntimeError(f"SQLMap is not installed or accessible: {e}")
 
-    def _build_command(
-        self,
-        target_url: str,
-        extra_args: str,
-        output_dir: str
-    ) -> List[str]:
-        """
-        Build the sqlmap command.
-
-        Args:
-            target_url: The URL to test.
-            extra_args: Additional sqlmap arguments.
-            output_dir: Directory to save sqlmap outputs.
-
-        Returns:
-            List of command elements.
-        """
-        cmd = []
-        if self.sudo:
-            cmd.append("sudo")
-        cmd.append(self.binary_path)
-        cmd.extend(["-u", target_url, "--batch", "--dump-all", "--output-dir", output_dir])
-        if extra_args:
-            cmd.extend(shlex.split(extra_args))
-        return cmd
-
-    @retry_operation(max_retries=1, retry_exceptions=(subprocess.TimeoutExpired, RuntimeError))
+    @retry_operation(max_retries=2, retry_exceptions=(subprocess.TimeoutExpired, RuntimeError))
     def scan(
         self,
         target_url: str,
-        extra_args: str = "",
-        timeout: int = 600
+        risk: str = "3",
+        timeout: int = 300,
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Run a sqlmap scan against a target URL.
 
         Args:
-            target_url: The URL to test for SQL injection.
-            extra_args: Additional sqlmap arguments.
-            timeout: Timeout in seconds.
+            target_url: The target URL (e.g., "http://example.com/page.php?id=1").
+            risk: The risk level (default "3").
+            timeout: Timeout for the scan in seconds.
+            **kwargs: Additional arguments to pass to sqlmap.
 
         Returns:
-            Dictionary with scan results (text output and metadata).
+            dict: Parsed scan results.
         """
-        with tempfile.TemporaryDirectory(prefix="sqlmap_output_") as output_dir:
+        with tempfile.NamedTemporaryFile(prefix="sqlmap_scan_", suffix=".json", delete=False) as tmp_file:
+            output_path = tmp_file.name
+
+        cmd = []
+        if self.sudo:
+            cmd.append("sudo")
+        cmd.append(self.binary_path)
+        # Use target_url and include common options
+        cmd.extend(["-u", target_url, f"--risk={risk}", "--batch", "--random-agent"])
+        # Optionally, add an output directory (here we use the directory of our temp file)
+        cmd.extend(["--output-dir", os.path.dirname(output_path)])
+        command_str = " ".join(cmd)
+        logger.info(f"Executing SQLMap scan: {command_str}")
+
+        try:
+            process = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            if process.returncode != 0:
+                error_msg = f"SQLMap scan failed with code {process.returncode}: {process.stderr}"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            # For simplicity, return the raw output as a dictionary.
+            result = {
+                "command": command_str,
+                "stdout": process.stdout,
+                "stderr": process.stderr,
+            }
+            return result
+        except subprocess.TimeoutExpired:
+            logger.error(f"SQLMap scan timed out after {timeout} seconds")
+            raise RuntimeError(f"SQLMap scan timed out after {timeout} seconds")
+        finally:
             try:
-                cmd = self._build_command(target_url, extra_args, output_dir)
-                command_str = " ".join(cmd)
-                logger.info(f"Executing sqlmap scan: {command_str}")
-                process = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-                if process.returncode != 0:
-                    error_msg = f"sqlmap scan failed with code {process.returncode}: {process.stderr}"
-                    logger.error(error_msg)
-                    raise RuntimeError(error_msg)
-                # Since sqlmap output is mostly file based, we return the captured stdout along with output directory details.
-                results = {
-                    "command": command_str,
-                    "stdout": process.stdout,
-                    "stderr": process.stderr,
-                    "output_dir": output_dir
-                }
-                return results
-            except subprocess.TimeoutExpired:
-                logger.error(f"sqlmap scan timed out after {timeout} seconds")
-                raise RuntimeError(f"Scan timed out after {timeout} seconds")
+                os.unlink(output_path)
+            except Exception as e:
+                logger.warning(f"Failed to remove temporary file {output_path}: {e}")
