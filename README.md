@@ -18,7 +18,7 @@ A comprehensive cybersecurity solution built using LangGraph, a powerful framewo
 
 ### Prerequisites
 
-- python33.8 or higher
+- python3 3.11 or higher
 - Access to necessary API keys (configured in environment variables)
 - Security tools: nmap, gobuster, ffuf, sqlmap
 
