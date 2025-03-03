@@ -40,25 +40,20 @@ def truncate_text(text: str, max_length: int = 500) -> str:
 # (Existing prompt strings remain unchanged)
 TASK_DECOMPOSITION_PROMPT = '''
 You are an expert cybersecurity analyst. Break down the following high-level security objective into concrete tasks using the available security tools listed below.
-
 OBJECTIVE: {objective}
 TARGET SCOPE: {scope}
-
 Available tools:
 1. nmap - For network mapping and port scanning
 2. gobuster - For directory and file enumeration
 3. ffuf - For web fuzzing to discover hidden endpoints
 4. sqlmap - For testing SQL injection vulnerabilities
-
 Create tasks covering different aspects of the security assessment. For each tool, create at least one relevant task if applicable to the objective.
-
 Each task should have:
 - "name": A short descriptive name
 - "description": A detailed explanation
 - "tool": One of: "nmap", "gobuster", "ffuf", or "sqlmap"
 - "params": Parameters specific to the tool, always including "target"
 - "depends_on": List of task IDs this task depends on (can be empty)
-
 Example tasks:
 [
     {
@@ -105,7 +100,6 @@ Example tasks:
         "depends_on": []
     }
 ]
-
 IMPORTANT FORMATTING INSTRUCTIONS:
 1. Your ENTIRE response must be ONLY a valid JSON array with no other text
 2. Start with '[' and end with ']'
@@ -116,51 +110,84 @@ IMPORTANT FORMATTING INSTRUCTIONS:
 7. Ensure all JSON syntax is correct (commas between objects, no trailing commas)
 '''
 
-RESULT_ANALYSIS_PROMPT = ''' You are an expert cybersecurity analyst. Review these scan results and determine follow-up actions.
+RESULT_ANALYSIS_PROMPT = '''
+You are an expert cybersecurity analyst. Analyze the following scan results and create follow-up tasks based on the findings.
 
-    ORIGINAL TASK: {task} SCAN RESULTS: {results} CURRENT TASKS: {current_tasks} TARGET SCOPE: {scope}
+ORIGINAL TASK: {task}
+SCAN RESULTS: {results}
+CURRENT TASKS: {current_tasks}
+TARGET SCOPE: {scope}
 
-    Determine if any new tasks should be added. Focus on:
+Available tools:
+1. nmap - For network mapping and port scanning
+2. gobuster - For directory and file enumeration
+3. ffuf - For web fuzzing to discover hidden endpoints
+4. sqlmap - For testing SQL injection vulnerabilities
 
-    Investigating open ports and services
-    Following up on potential vulnerabilities
-    Confirming uncertain results
-    I need your response in a specific format. You must return a valid JSON array of tasks, structured as shown below:
+Create follow-up tasks based on the scan results. Focus on:
+- Investigating discovered open ports and services
+- Deeper investigation of potential vulnerabilities
+- Confirming uncertain or partial results
+- Expanding scope based on new information discovered
 
-    [
-    {
-        "id": "unique_id_string",
-        "name": "Descriptive task name",
-        "description": "Detailed description",
-        "tool": "nmap",
-        "params": {"target": "domain.com", "scan_type": "syn", "ports": "1-1000"}
-    }
-    ]
-    Important rules for your response:
+Each task should have:
+- "name": A short descriptive name
+- "description": A detailed explanation with reference to the original findings
+- "tool": One of: "nmap", "gobuster", "ffuf", or "sqlmap"
+- "params": Parameters specific to the tool, always including "target"
+- "depends_on": List of task IDs this task depends on (can be empty)
 
-    Start your response with a valid JSON array, enclosed in square brackets []
-    Each task in the array must be a valid JSON object with all required fields
-    Do not include any explanation text before or after the JSON array
-    Always include the "target" parameter in the params object
-    Return an empty array [] if no new tasks are needed '''
+IMPORTANT FORMATTING INSTRUCTIONS:
+1. Your ENTIRE response must be ONLY a valid JSON array with no other text
+2. Start with '[' and end with ']'
+3. Do not include any explanation, markdown code blocks, or text outside the JSON array
+4. Each object in the array must have exactly the fields shown in the examples
+5. All field names must be in double quotes (e.g., "name", not name)
+6. Do NOT include "id" fields - these will be generated automatically
+7. Ensure all JSON syntax is correct (commas between objects, no trailing commas)
+8. Return an empty array [] if no new tasks are needed
+'''
 
-REPORT_GENERATION_PROMPT = ''' Please generate a complete security report based on the following information:
+REPORT_GENERATION_PROMPT = '''
+You are an expert cybersecurity analyst. Generate a comprehensive security assessment report based on the following information:
 
-    OBJECTIVES: {"\n".join(state.objectives)}
+OBJECTIVES: {"\n".join(state.objectives)}
+TARGET SCOPE: {scope_str}
+EXECUTED TASKS: {len(self.task_manager.get_all_tasks())} tasks were executed, with {len([t for t in self.task_manager.get_all_tasks() if t.status == TaskStatus.COMPLETED])} completed successfully.
+KEY FINDINGS: {raw_results}
 
-    TARGET SCOPE: {scope_str}
+Your report should include:
 
-    EXECUTED TASKS: {len(self.task_manager.get_all_tasks())} tasks were executed, with {len([t for t in self.task_manager.get_all_tasks() if t.status == TaskStatus.COMPLETED])} completed successfully.
+1. Executive Summary
+   - Brief overview of the assessment objectives
+   - Summary of critical findings
+   - Overall security posture evaluation
 
-    KEY FINDINGS: {raw_results}
+2. Methodology
+   - Assessment approach
+   - Tools utilized (nmap, gobuster, ffuf, sqlmap)
+   - Scope of assessment
 
-    Please structure the report with:
+3. Key Findings
+   - Discovered vulnerabilities categorized by severity (Critical, High, Medium, Low)
+   - Each finding should include:
+     * Description
+     * Affected systems/components
+     * Potential impact
+     * Evidence from the scan results
 
-    Executive Summary
-    Methodology
-    Key Findings
-    Recommendations
-    Technical Details '''
+4. Recommendations
+   - Specific remediation steps for each vulnerability
+   - Prioritized action items
+   - Long-term security improvements
+
+5. Technical Details
+   - Detailed scan results
+   - Specific paths, ports, and endpoints tested
+   - Raw tool output for reference
+
+The report should be professional, concise, and actionable. Focus on providing clear context for technical findings and practical recommendations that can be implemented to improve security.
+'''
 
 def extract_json_array(text: str) -> List[Dict[str, Any]]: 
     """ Extracts a JSON array from text, handling various formats and common LLM formatting issues. """ 
