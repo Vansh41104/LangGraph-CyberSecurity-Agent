@@ -444,8 +444,6 @@ class CybersecurityWorkflow:
             return state
 
 
-
-
     def _get_next_executable_task(self) -> Optional[Task]:
         try:
             for task in self.task_manager.get_all_tasks():
@@ -1089,7 +1087,6 @@ class CybersecurityWorkflow:
                 tasks_added += 1
         logger.info(f"Added {tasks_added} new tasks based on analysis")
         state.task_manager = self.task_manager.to_dict()
-
 
     def _generate_report(self, state: AgentState) -> AgentState:
         logger.info("Generating final security report")
