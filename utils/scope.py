@@ -29,8 +29,11 @@ class ScopeValidator:
         if domain.startswith("."):
             self.add_wildcard_domain(domain)
         else:
-            self.allowed_domains.append(domain)
-            logger.info(f"Added domain to scope: {domain}")
+            if domain not in self.allowed_domains:
+                self.allowed_domains.append(domain)
+                logger.info(f"Added domain to scope: {domain}")
+            else:
+                logger.info(f"Domain {domain} is already in scope")
 
     def add_wildcard_domain(self, wildcard: str):
         """Add a wildcard domain to the allowed scope.
@@ -40,16 +43,22 @@ class ScopeValidator:
         wildcard = wildcard.lower().strip()
         if not wildcard.startswith("."):
             wildcard = "." + wildcard
-        self.wildcard_domains.append(wildcard)
-        logger.info(f"Added wildcard domain to scope: {wildcard}")
+        if wildcard not in self.wildcard_domains:
+            self.wildcard_domains.append(wildcard)
+            logger.info(f"Added wildcard domain to scope: {wildcard}")
+        else:
+            logger.info(f"Wildcard domain {wildcard} is already in scope")
 
     def add_ip(self, ip: str):
         """Add a single IP to the allowed scope."""
         try:
             ip_obj = ipaddress.IPv4Address(ip)
             ip_str = str(ip_obj)
-            self.allowed_ips.append(ip_str)
-            logger.info(f"Added IP to scope: {ip_str}")
+            if ip_str not in self.allowed_ips:
+                self.allowed_ips.append(ip_str)
+                logger.info(f"Added IP to scope: {ip_str}")
+            else:
+                logger.info(f"IP {ip_str} is already in scope")
         except ValueError as e:
             logger.error(f"Invalid IP format: {ip}. Error: {str(e)}")
             raise ValueError(f"Invalid IP format: {ip}")
@@ -58,8 +67,11 @@ class ScopeValidator:
         """Add an IP range (in CIDR notation) to the allowed scope."""
         try:
             network = ipaddress.IPv4Network(ip_range, strict=False)
-            self.allowed_ips.append(network)
-            logger.info(f"Added IP range to scope: {ip_range}")
+            if network not in self.allowed_ips:
+                self.allowed_ips.append(network)
+                logger.info(f"Added IP range to scope: {ip_range}")
+            else:
+                logger.info(f"IP range {ip_range} is already in scope")
         except ValueError as e:
             logger.error(f"Invalid IP range format: {ip_range}. Error: {str(e)}")
             raise ValueError(f"Invalid IP range format: {ip_range}")

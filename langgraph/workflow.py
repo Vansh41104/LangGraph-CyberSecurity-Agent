@@ -39,75 +39,36 @@ def truncate_text(text: str, max_length: int = 500) -> str:
 
 # (Existing prompt strings remain unchanged)
 TASK_DECOMPOSITION_PROMPT = '''
-You are an expert cybersecurity analyst. Break down the following high-level security objective into concrete tasks using the available security tools listed below.
+You are an expert cybersecurity analyst. Based on the following high-level security objective provided by the user, create the concrete tasks using the available security tools listed below. Only include tasks that are explicitly mentioned or clearly implied in the objective. If no specific tool is mentioned, choose the most appropriate tool for the task.
+
 OBJECTIVE: {objective}
 TARGET SCOPE: {scope}
+
 Available tools:
 1. nmap - For network mapping and port scanning
 2. gobuster - For directory and file enumeration
 3. ffuf - For web fuzzing to discover hidden endpoints
 4. sqlmap - For testing SQL injection vulnerabilities
-Create tasks covering different aspects of the security assessment. For each tool, create at least one relevant task if applicable to the objective.
+
+TASK EXTRACTION INSTRUCTIONS:
+1. If TARGET SCOPE is empty or unspecified, extract the domain/IP/URL from the OBJECTIVE.
+2. Only create tasks that are explicitly mentioned or clearly implied in the objective.
+3. For each tool, create a task ONLY if it is explicitly specified or clearly required based on the objective.
+4. If a tool is not explicitly mentioned, infer the most relevant tool based on the context of the objective.
+5. Focus on the specific security assessment mentioned in the objective rather than creating a generic set of tasks.
+
 Each task should have:
 - "name": A short descriptive name
 - "description": A detailed explanation
 - "tool": One of: "nmap", "gobuster", "ffuf", or "sqlmap"
 - "params": Parameters specific to the tool, always including "target"
 - "depends_on": List of task IDs this task depends on (can be empty)
-Example tasks:
-[
-    {
-        "name": "Initial port scan",
-        "description": "Identify open ports and services on the target",
-        "tool": "nmap",
-        "params": {
-            "target": "example.com",
-            "scan_type": "syn",
-            "ports": "1-1000"
-        },
-        "depends_on": []
-    },
-    {
-        "name": "Directory enumeration",
-        "description": "Find hidden directories on the web server",
-        "tool": "gobuster",
-        "params": {
-            "target": "http://example.com",
-            "wordlist": "common.txt"
-        },
-        "depends_on": []
-    },
-    {
-        "name": "Web fuzzing for endpoints",
-        "description": "Discover hidden endpoints and parameters on the web application",
-        "tool": "ffuf",
-        "params": {
-            "target": "http://example.com/FUZZ",
-            "wordlist": "common.txt",
-            "extensions": "php,html,txt"
-        },
-        "depends_on": []
-    },
-    {
-        "name": "SQL injection testing",
-        "description": "Scan for SQL injection vulnerabilities in the web application",
-        "tool": "sqlmap",
-        "params": {
-            "target": "http://example.com/page.php?id=1",
-            "level": 3,
-            "risk": 2
-        },
-        "depends_on": []
-    }
-]
+
 IMPORTANT FORMATTING INSTRUCTIONS:
-1. Your ENTIRE response must be ONLY a valid JSON array with no other text
-2. Start with '[' and end with ']'
-3. Do not include any explanation, markdown code blocks, or text outside the JSON array
-4. Each object in the array must have exactly the fields shown in the examples
-5. All field names must be in double quotes (e.g., "name", not name)
-6. Do NOT include "id" fields - these will be generated automatically
-7. Ensure all JSON syntax is correct (commas between objects, no trailing commas)
+1. Your ENTIRE response must be ONLY a valid JSON array with no extra text.
+2. Output raw JSON without any markdown formatting or triple backticks.
+3. Start with '[' and end with ']'.
+4. Do not include any explanation text.
 '''
 
 RESULT_ANALYSIS_PROMPT = '''
@@ -333,160 +294,155 @@ class CybersecurityWorkflow:
             return False
 
     def _decompose_tasks(self, state: AgentState) -> AgentState:
-        logger.info("Decomposing high-level objectives into tasks")
-        self.task_manager = TaskManager()
+            logger.info("Decomposing high-level objectives into tasks")
 
-        # Construct the scope string
-        domains = self.scope_validator.domains + self.scope_validator.wildcard_domains
-        ip_ranges = self.scope_validator.ip_ranges
-        scope_str = f"Domains: {', '.join(domains)}\nIP Ranges: {', '.join(map(str, ip_ranges))}"
+            # If state.task_manager already exists and contains tasks, skip task decomposition.
+            if state.task_manager and isinstance(state.task_manager, dict):
+                self.task_manager.from_dict(state.task_manager)
+                if self.task_manager.get_all_tasks():
+                    logger.info("Tasks already exist; skipping task decomposition.")
+                    return state
+            else:
+                self.task_manager = TaskManager()
 
-        # Use the first domain as fallback target
-        fallback_target = self.scope_validator.domains[0] if self.scope_validator.domains else "example.com"
-        # If fallback_target does not have a protocol, add one for web tasks
-        web_target = fallback_target if fallback_target.startswith("http") else f"http://{fallback_target}"
+            # If no domains specified in scope, attempt to extract a domain from the objectives.
+            if not self.scope_validator.domains and not self.scope_validator.wildcard_domains:
+                domain_pattern = r'(https?://)?(?:www\.)?([\w.-]+\.[a-zA-Z]{2,})'
+                for obj in state.objectives:
+                    matches = re.finditer(domain_pattern, obj)
+                    for match in matches:
+                        extracted_domain = match.group(2)
+                        self.scope_validator.add_domain(extracted_domain)
+                        logger.info(f"Extracted domain {extracted_domain} from objective.")
 
-        # Create fallback tasks for each tool
-        fallback_tasks = []
+            # Construct the scope string based on the (possibly updated) scope.
+            domains = self.scope_validator.domains + self.scope_validator.wildcard_domains
+            ip_ranges = self.scope_validator.ip_ranges
+            scope_str = f"Domains: {', '.join(domains)}\nIP Ranges: {', '.join(map(str, ip_ranges))}"
 
-        # Fallback task for nmap (port scanning)
-        fallback_tasks.append(Task(
-            id="fallback-scan-nmap",
-            name="Basic Port Scan",
-            description="Basic port scan created when task decomposition failed",
-            tool="nmap",
-            params={"target": fallback_target, "scan_type": "syn", "ports": "1-1000"},
-            depends_on=[]
-        ))
-
-        # Fallback task for gobuster (directory enumeration)
-        fallback_tasks.append(Task(
-            id="fallback-scan-gobuster",
-            name="Directory Enumeration",
-            description="Basic directory enumeration created when task decomposition failed",
-            tool="gobuster",
-            params={"target": web_target, "wordlist": "common.txt"},
-            depends_on=[]
-        ))
-
-        # Fallback task for ffuf (web fuzzing)
-        fallback_tasks.append(Task(
-            id="fallback-scan-ffuf",
-            name="Web Fuzzing for Endpoints",
-            description="Basic web fuzzing created when task decomposition failed",
-            tool="ffuf",
-            params={"target": f"{web_target}/FUZZ", "wordlist": "common.txt", "extensions": "php,html,txt"},
-            depends_on=[]
-        ))
-
-        # Fallback task for sqlmap (SQL injection testing)
-        fallback_tasks.append(Task(
-            id="fallback-scan-sqlmap",
-            name="SQL Injection Testing",
-            description="Basic SQL injection testing created when task decomposition failed",
-            tool="sqlmap",
-            params={"target": f"{web_target}/page.php?id=1", "level": 3, "risk": 2},
-            depends_on=[]
-        ))
-
-        def add_fallback(message: str):
-            logger.warning(message)
-            for task in fallback_tasks:
-                if not self.task_manager.has_task(task.id):
-                    self.task_manager.add_task(task)
-
-        try:
-            # Build prompt to generate tasks from high-level objectives
-            prompt = ChatPromptTemplate.from_messages([
-                SystemMessage(content=(
-                    "You are a cybersecurity task planning assistant. "
-                    "Return a VALID JSON array of tasks, no extra text. "
-                    "Each task must have: name, description, tool, params, depends_on."
-                )),
-                HumanMessage(content=TASK_DECOMPOSITION_PROMPT.format(
-                    objective="\n".join(state.objectives),
-                    scope=scope_str
-                ))
-            ])
-
-            chain = prompt | self.llm
-            raw_output_obj = chain.invoke({})
-            raw_output = getattr(raw_output_obj, "content", str(raw_output_obj)) or ""
-            import re
-            raw_output_clean = raw_output.strip()
-            raw_output_clean = re.sub(r'^```(\w+)?', '', raw_output_clean)
-            raw_output_clean = re.sub(r'```$', '', raw_output_clean)
-
-            logger.debug(f"Raw LLM output after cleanup:\n{raw_output_clean}")
+            # Use the first domain as fallback target.
+            fallback_target = self.scope_validator.domains[0] if self.scope_validator.domains else "example.com"
+            web_target = fallback_target if fallback_target.startswith("http") else f"http://{fallback_target}"
 
             try:
-                tasks_list = extract_json_array(raw_output_clean)
-            except Exception as json_error:
-                logger.error(f"Failed to parse JSON from LLM output: {json_error}")
-                logger.error(f"Raw output (truncated): {raw_output_clean[:500]}...")
-                state.error_log.append(f"JSON parsing error: {json_error}")
-                add_fallback("No tasks were extracted due to JSON error.")
-                state.task_manager = self.task_manager.to_dict()
-                return state
+                # Build prompt to generate tasks from high-level objectives.
+                prompt = ChatPromptTemplate.from_messages([
+                    SystemMessage(content=(
+                        "You are a cybersecurity task planning assistant. "
+                        "Return a VALID JSON array of tasks, no extra text. "
+                        "Each task must have: name, description, tool, params, depends_on."
+                    )),
+                    HumanMessage(content=TASK_DECOMPOSITION_PROMPT.format(
+                        objective="\n".join(state.objectives),
+                        scope=scope_str
+                    ))
+                ])
 
-            if not tasks_list:
-                add_fallback("No tasks were extracted from the LLM output.")
-                state.task_manager = self.task_manager.to_dict()
-                return state
+                chain = prompt | self.llm
+                raw_output_obj = chain.invoke({})
+                raw_output = getattr(raw_output_obj, "content", str(raw_output_obj)) or ""
+                raw_output_clean = raw_output.strip()
+                raw_output_clean = re.sub(r'^```(\w+)?', '', raw_output_clean)
+                raw_output_clean = re.sub(r'```$', '', raw_output_clean)
 
-            valid_tools = {"nmap", "gobuster", "ffuf", "sqlmap"}
-            tasks_added = 0
+                # Additional cleaning: ensure the output is wrapped in square brackets.
+                if not raw_output_clean.startswith('['):
+                    raw_output_clean = '[' + raw_output_clean
+                if not raw_output_clean.endswith(']'):
+                    raw_output_clean = raw_output_clean + ']'
 
-            for task_data in tasks_list[:10]:  # limit to 10 tasks
-                if not isinstance(task_data, dict):
-                    logger.warning(f"Skipping invalid task data (not a dict): {task_data}")
-                    continue
+                logger.debug(f"Raw LLM output after cleanup:\n{raw_output_clean}")
 
-                missing_fields = [f for f in ("name", "description", "tool", "params") if f not in task_data]
-                if missing_fields:
-                    logger.warning(f"Skipping task missing fields {missing_fields}: {task_data}")
-                    continue
+                try:
+                    tasks_list = extract_json_array(raw_output_clean)
+                except Exception as json_error:
+                    logger.error(f"Failed to parse JSON from LLM output: {json_error}")
+                    logger.error(f"Raw output (truncated): {raw_output_clean[:500]}...")
+                    state.error_log.append(f"JSON parsing error: {json_error}")
+                    state.task_manager = self.task_manager.to_dict()
+                    return state
 
-                tool_name = task_data.get("tool")
-                if tool_name not in valid_tools:
-                    logger.warning(f"Skipping task with invalid tool: {tool_name}")
-                    continue
+                if not tasks_list:
+                    logger.error("No tasks were extracted from the LLM output.")
+                    state.error_log.append("No tasks were extracted from the LLM output.")
+                    state.task_manager = self.task_manager.to_dict()
+                    return state
 
-                params = task_data.get("params", {})
-                if not isinstance(params, dict) or "target" not in params:
-                    logger.warning(f"Skipping task with invalid or missing 'target' in params: {params}")
-                    continue
+                valid_tools = {"nmap", "gobuster", "ffuf", "sqlmap"}
+                tasks_added = 0
 
-                # Generate a unique ID
-                task_id = str(uuid.uuid4())
-                new_task = Task(
-                    id=task_id,
-                    name=task_data["name"],
-                    description=task_data["description"],
-                    tool=tool_name,
-                    params=params,
-                    depends_on=task_data.get("depends_on", [])
-                )
+                for task_data in tasks_list[:10]:  # limit to 10 tasks
+                    if not isinstance(task_data, dict):
+                        logger.warning(f"Skipping invalid task data (not a dict): {task_data}")
+                        continue
 
-                target = params["target"]
-                if self.scope_validator.is_in_scope(target):
-                    self.task_manager.add_task(new_task)
-                    tasks_added += 1
+                    missing_fields = [f for f in ("name", "description", "tool", "params") if f not in task_data]
+                    if missing_fields:
+                        logger.warning(f"Skipping task missing fields {missing_fields}: {task_data}")
+                        continue
+
+                    tool_name = task_data.get("tool")
+                    if tool_name not in valid_tools:
+                        logger.warning(f"Skipping task with invalid tool: {tool_name}")
+                        continue
+
+                    params = task_data.get("params", {})
+                    if not isinstance(params, dict) or "target" not in params:
+                        logger.warning(f"Skipping task with invalid or missing 'target' in params: {params}")
+                        continue
+
+                    # Duplicate-check: skip if a task with same name, tool, and target already exists.
+                    duplicate = any(
+                        t.name == task_data["name"] and 
+                        t.tool == tool_name and 
+                        t.params.get("target") == params.get("target")
+                        for t in self.task_manager.get_all_tasks()
+                    )
+                    if duplicate:
+                        logger.info(f"Duplicate task '{task_data['name']}' for tool '{tool_name}' already exists; skipping.")
+                        continue
+
+                    # Normalize target if it's similar to the fallback target.
+                    target = params["target"]
+                    if not self.scope_validator.is_in_scope(target):
+                        # Simple normalization: if one domain is contained in the other (case-insensitive), adjust the target.
+                        if fallback_target.lower() in target.lower() or target.lower() in fallback_target.lower():
+                            logger.info(f"Normalizing target from {target} to {fallback_target}")
+                            target = fallback_target
+                            params["target"] = fallback_target
+                        else:
+                            logger.warning(f"Skipping out-of-scope target: {target}")
+                            continue
+
+                    # Generate a unique ID for the new task.
+                    task_id = str(uuid.uuid4())
+                    new_task = Task(
+                        id=task_id,
+                        name=task_data["name"],
+                        description=task_data["description"],
+                        tool=tool_name,
+                        params=params,
+                        depends_on=task_data.get("depends_on", [])
+                    )
+
+                    if self.scope_validator.is_in_scope(target):
+                        self.task_manager.add_task(new_task)
+                        tasks_added += 1
+                    else:
+                        logger.warning(f"Skipping out-of-scope target after normalization: {target}")
+
+                if tasks_added == 0:
+                    logger.error("No valid tasks were added from the provided prompt.")
                 else:
-                    logger.warning(f"Skipping out-of-scope target: {target}")
+                    logger.info(f"Created {tasks_added} tasks from objectives.")
 
-            if tasks_added == 0:
-                add_fallback("No valid tasks were added; using fallback tasks.")
-            else:
-                logger.info(f"Created {tasks_added} tasks from objectives.")
+            except Exception as e:
+                logger.error(f"Error decomposing tasks: {e}")
+                state.error_log.append(f"Error decomposing tasks: {e}")
 
-        except Exception as e:
-            logger.error(f"Error decomposing tasks: {e}")
-            state.error_log.append(f"Error decomposing tasks: {e}")
-            add_fallback("Exception occurred during task decomposition; fallback tasks added.")
+            state.task_manager = self.task_manager.to_dict()
+            return state
 
-        state.task_manager = self.task_manager.to_dict()
-        return state
 
 
 
