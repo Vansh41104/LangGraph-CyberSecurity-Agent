@@ -520,30 +520,37 @@ class CybersecurityWorkflow:
             if "target" in params and isinstance(params["target"], str) and "," in params["target"]:
                 params["target"] = [t.strip() for t in params["target"].split(",")]
             
-            # For gobuster, validate and ensure the wordlist exists
-            if task.tool == "gobuster" and "wordlist" in params:
-                # List of common wordlist paths to try if the specified one doesn't exist
-                wordlist_paths = [
-                    params["wordlist"],  # First try the user-specified wordlist
+            # For gobuster and ffuf, validate and ensure a valid wordlist is provided
+            if task.tool in ["gobuster", "ffuf"]:
+                default_wordlist_paths = [
                     "/usr/share/wordlists/gobuster/common.txt",
                     "/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt",
                     "/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt",
                     "/usr/share/dirb/wordlists/common.txt"
                 ]
+                # If no wordlist is provided, try defaults
+                if "wordlist" not in params or not params["wordlist"]:
+                    for wordlist in default_wordlist_paths:
+                        if os.path.exists(wordlist):
+                            logger.warning(f"No wordlist provided for {task.tool}, using default {wordlist}")
+                            params["wordlist"] = wordlist
+                            break
+                    if "wordlist" not in params:
+                        raise ValueError(f"No valid wordlist provided and default wordlist not found for {task.tool}")
+                else:
+                    # If a wordlist is provided, verify it or use the first available default
+                    provided_wordlist = params["wordlist"]
+                    wordlist_found = False
+                    for wordlist in [provided_wordlist] + default_wordlist_paths:
+                        if os.path.exists(wordlist):
+                            if wordlist != provided_wordlist:
+                                logger.warning(f"Wordlist {provided_wordlist} not found, using {wordlist} instead")
+                            params["wordlist"] = wordlist
+                            wordlist_found = True
+                            break
+                    if not wordlist_found:
+                        raise ValueError(f"No valid wordlist provided and default wordlist not found for {task.tool}")
                 
-                # Find the first wordlist that exists
-                wordlist_found = False
-                for wordlist in wordlist_paths:
-                    if os.path.exists(wordlist):
-                        if wordlist != params["wordlist"]:
-                            logger.warning(f"Wordlist {params['wordlist']} not found, using {wordlist} instead")
-                        params["wordlist"] = wordlist
-                        wordlist_found = True
-                        break
-                
-                if not wordlist_found:
-                    raise ValueError(f"No valid wordlist found. Tried: {', '.join(wordlist_paths)}")
-                    
                 # Handle http_method parameter 
                 if "http_method" in params:
                     method = params.pop("http_method")
@@ -592,11 +599,10 @@ class CybersecurityWorkflow:
                 sqlmap_flags = ["dbs", "batch", "forms", "tables", "columns", "current-user", "current-db"]
                 for flag in sqlmap_flags:
                     if flag in params:
-                        # If the parameter value is 'all' or True, set it to True to be treated as a flag
                         if params[flag] == 'all' or params[flag] is True:
                             params[flag] = True
             
-           # For nmap, process tool-specific parameters
+            # For nmap, process tool-specific parameters
             if task.tool == "nmap":
                 # Limit the ports range to 9000 if needed.
                 if "ports" in params:
@@ -619,7 +625,6 @@ class CybersecurityWorkflow:
                 # Handle script parameter - fix for ssh-vuln script not found error
                 if "script" in params:
                     script_value = params.pop("script")
-                    # Convert both 'ssh-vuln' and 'ssh-enum' to 'ssh-*'
                     if script_value in ["ssh-vuln", "ssh-enum"]:
                         script_value = "ssh-*"
                         logger.info("Converting '{}' to 'ssh-*' to run all SSH-related scripts".format(script_value))
@@ -630,7 +635,6 @@ class CybersecurityWorkflow:
                 
                 # Handle scan type parameter
                 if "scan_type" in params:
-                    # Special case for SSH vulnerability scanning
                     if params["scan_type"] in ["ssh_vuln", "ssh_vulnerability"]:
                         params["scan_type"] = "ssh_vulnerability"
                         logger.info("Using predefined 'ssh_vulnerability' scan type")
@@ -640,7 +644,6 @@ class CybersecurityWorkflow:
                         else:
                             params["arguments"] = "-T4 --max-retries=2"
                 else:
-                    # Default scan behavior
                     if "arguments" in params:
                         params["arguments"] += " -T4 --max-retries=2"
                     else:
@@ -653,9 +656,8 @@ class CybersecurityWorkflow:
                     else:
                         params["arguments"] = "-sV --version-intensity=2"
 
-            
             # Set timeout and sudo if applicable
-            params["timeout"] = min(params.get("timeout", 180), 300)  # Increase max timeout to 5 minutes
+            params["timeout"] = min(params.get("timeout", 180), 300)
             if "sudo" in params and hasattr(tool, "sudo"):
                 tool.sudo = params.pop("sudo")
             
@@ -681,12 +683,10 @@ class CybersecurityWorkflow:
                     retry_delay = min(2 ** task.retry_count, 60)
                     logger.info(f"Retrying task {task.id} ({task.name}) in {retry_delay}s, attempt {task.retry_count}")
                     
-                    # For retry attempts with SQLMap, try a more conservative approach
                     if task.tool == "sqlmap" and task.retry_count == 1:
-                        # Set a very basic scan for the retry
-                        task.params["risk"] = "1"  # Lower risk level
-                        task.params["level"] = "1"  # Lower detection level
-                        task.params.pop("dump-all", None)  # Remove dump-all
+                        task.params["risk"] = "1"
+                        task.params["level"] = "1"
+                        task.params.pop("dump-all", None)
                         logger.info("Adjusting SQLMap parameters for retry to use more conservative settings")
             state.error_log.append(error_msg)
             
@@ -696,6 +696,8 @@ class CybersecurityWorkflow:
                 state.task_manager = self.task_manager.to_dict()
                         
         return state
+
+
 
     def debug_scan_results(self, result: Any, task_id: str, tool_name: str) -> Any:
         try:
