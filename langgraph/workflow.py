@@ -1337,7 +1337,7 @@ class CybersecurityWorkflow:
         try:
             compiled_workflow = self.workflow.compile()
             compiled_workflow.recursion_limit = 10000
-            final_state = compiled_workflow.invoke(initial_state, config={"recursion_limit": 50})
+            final_state = compiled_workflow.invoke(initial_state, config={"recursion_limit": 10000})
 
             if "results" not in final_state:
                 final_state["results"] = {}
