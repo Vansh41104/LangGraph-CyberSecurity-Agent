@@ -236,7 +236,7 @@ tab_report, tab_dashboard, tab_tasks, tab_logs = st.tabs(
     ["Security Audit Report", "Dashboard", "Task List", "Logs"]
 )
 
-# 1) Report Tab (was tab4 originally)
+# 1) Report Tab
 with tab_report:
     st.header("Security Audit Report")
     
@@ -282,7 +282,7 @@ with tab_report:
     else:
         st.info("No report available. Complete a scan to generate a report.")
 
-# 2) Dashboard Tab (was tab1 originally)
+# 2) Dashboard Tab
 with tab_dashboard:
     st.header("Cybersecurity Pipeline Dashboard")
     
@@ -294,17 +294,16 @@ with tab_dashboard:
                   value="Running" if st.session_state.is_running else "Idle")
     
     with col2:
-        if st.session_state.task_manager:
+        if st.session_state.task_manager is not None:
             tasks = st.session_state.task_manager.get_all_tasks()
             total_tasks = len(tasks)
             completed_tasks = sum(1 for t in tasks if t.status == TaskStatus.COMPLETED)
             st.metric(label="Task Progress", 
-                      value=f"{completed_tasks}/{total_tasks}")
+                      value=f"{completed_tasks}/{total_tasks}" if total_tasks > 0 else "No tasks yet")
         else:
             st.metric(label="Task Progress", value="0/0")
     
     with col3:
-        # Updated: vulnerabilities metric now shows "N/A" as the new report doesn't include it.
         st.metric(label="Vulnerabilities", value="N/A")
     
     # Scope information
@@ -313,23 +312,27 @@ with tab_dashboard:
         col1, col2 = st.columns(2)
         with col1:
             st.write("**Domains:**")
-            for domain in st.session_state.scope_validator.domains:
-                st.write(f"- {domain}")
+            if st.session_state.scope_validator.domains:
+                for domain in st.session_state.scope_validator.domains:
+                    st.write(f"- {domain}")
+            else:
+                st.write("No domains defined.")
         
         with col2:
             st.write("**IP Ranges:**")
-            for ip_range in st.session_state.scope_validator.ip_ranges:
-                st.write(f"- {ip_range}")
+            if st.session_state.scope_validator.ip_ranges:
+                for ip_range in st.session_state.scope_validator.ip_ranges:
+                    st.write(f"- {ip_range}")
+            else:
+                st.write("No IP ranges defined.")
     else:
         st.info("No scope defined. Configure and start a scan to define the scope.")
     
-    # Live task monitoring (if available)
-    if st.session_state.task_manager:
+    # Live task monitoring
+    if st.session_state.task_manager is not None:
         st.subheader("Live Task Monitoring")
-        
         tasks = st.session_state.task_manager.get_all_tasks()
         
-        # Show current running task
         running_tasks = [t for t in tasks if t.status == TaskStatus.RUNNING]
         if running_tasks:
             with st.expander("Currently Running", expanded=True):
@@ -337,8 +340,10 @@ with tab_dashboard:
                     st.info(f"**Task:** {task.description}")
                     st.write(f"**Started at:** {task.started_at.strftime('%Y-%m-%d %H:%M:%S') if task.started_at else 'N/A'}")
                     st.write(f"**Attempts:** {getattr(task, 'retry_count', 0)}")
+        else:
+            st.info("No tasks are currently running.")
         
-        # Visualize task completion using a progress chart
+        # Visualize task status breakdown using a bar chart
         statuses = [t.status.name for t in tasks]
         status_counts = {
             "PENDING": statuses.count("PENDING"),
@@ -351,65 +356,71 @@ with tab_dashboard:
             "Status": list(status_counts.keys()),
             "Count": list(status_counts.values())
         })
-        
         st.bar_chart(df.set_index("Status"))
+    else:
+        st.info("Task manager not initialized. Start a scan to generate tasks.")
 
-# 3) Task List Tab (was tab2 originally)
+# 3) Task List Tab
 with tab_tasks:
     st.header("Task List")
     
-    if st.session_state.task_manager:
+    if st.session_state.task_manager is not None:
         tasks = st.session_state.task_manager.get_all_tasks()
         
-        # Group tasks by status
-        completed_tasks = [t for t in tasks if t.status == TaskStatus.COMPLETED]
-        running_tasks = [t for t in tasks if t.status == TaskStatus.RUNNING]
-        pending_tasks = [t for t in tasks if t.status == TaskStatus.PENDING]
-        failed_tasks = [t for t in tasks if t.status == TaskStatus.FAILED]
-        
-        # Display tasks by group
-        if running_tasks:
-            with st.expander("Running Tasks", expanded=True):
-                for task in running_tasks:
-                    st.info(f"**Task {task.id}:** {task.description}")
-                    st.write(f"**Started at:** {task.started_at.strftime('%Y-%m-%d %H:%M:%S') if task.started_at else 'N/A'}")
-                    st.write(f"**Attempts:** {getattr(task, 'retry_count', 0)}")
-        
-        if pending_tasks:
-            with st.expander("Pending Tasks", expanded=True):
-                for task in pending_tasks:
-                    st.warning(f"**Task {task.id}:** {task.description}")
-                    st.write(f"**Created at:** {task.created_at.strftime('%Y-%m-%d %H:%M:%S') if task.created_at else 'N/A'}")
-        
-        if completed_tasks:
-            with st.expander("Completed Tasks", expanded=False):
-                for task in completed_tasks:
-                    st.success(f"**Task {task.id}:** {task.description}")
-                    st.write(f"**Completed at:** {task.completed_at.strftime('%Y-%m-%d %H:%M:%S') if task.completed_at else 'N/A'}")
-                    if task.result:
-                        with st.expander("Result"):
-                            st.code(str(task.result))
-        
-        if failed_tasks:
-            with st.expander("Failed Tasks", expanded=False):
-                for task in failed_tasks:
-                    st.error(f"**Task {task.id}:** {task.description}")
-                    st.write(f"**Attempts:** {getattr(task, 'retry_count', 0)}")
-                    error_msg = ", ".join(task.errors) if hasattr(task, "errors") and task.errors else ""
-                    st.write(f"**Error:** {error_msg}")
+        if tasks:
+            # Group tasks by status
+            completed_tasks = [t for t in tasks if t.status == TaskStatus.COMPLETED]
+            running_tasks = [t for t in tasks if t.status == TaskStatus.RUNNING]
+            pending_tasks = [t for t in tasks if t.status == TaskStatus.PENDING]
+            failed_tasks = [t for t in tasks if t.status == TaskStatus.FAILED]
+            
+            # Display running tasks
+            if running_tasks:
+                with st.expander("Running Tasks", expanded=True):
+                    for task in running_tasks:
+                        st.info(f"**Task {task.id}:** {task.description}")
+                        st.write(f"**Started at:** {task.started_at.strftime('%Y-%m-%d %H:%M:%S') if task.started_at else 'N/A'}")
+                        st.write(f"**Attempts:** {getattr(task, 'retry_count', 0)}")
+            
+            # Display pending tasks
+            if pending_tasks:
+                with st.expander("Pending Tasks", expanded=True):
+                    for task in pending_tasks:
+                        st.warning(f"**Task {task.id}:** {task.description}")
+                        st.write(f"**Created at:** {task.created_at.strftime('%Y-%m-%d %H:%M:%S') if task.created_at else 'N/A'}")
+            
+            # Display completed tasks
+            if completed_tasks:
+                with st.expander("Completed Tasks", expanded=False):
+                    for task in completed_tasks:
+                        st.success(f"**Task {task.id}:** {task.description}")
+                        st.write(f"**Completed at:** {task.completed_at.strftime('%Y-%m-%d %H:%M:%S') if task.completed_at else 'N/A'}")
+                        if task.result:
+                            with st.expander("Result"):
+                                st.code(str(task.result))
+            
+            # Display failed tasks
+            if failed_tasks:
+                with st.expander("Failed Tasks", expanded=False):
+                    for task in failed_tasks:
+                        st.error(f"**Task {task.id}:** {task.description}")
+                        st.write(f"**Attempts:** {getattr(task, 'retry_count', 0)}")
+                        error_msg = ", ".join(task.errors) if hasattr(task, "errors") and task.errors else "No error details"
+                        st.write(f"**Error:** {error_msg}")
+        else:
+            st.info("No tasks available. Start a scan to generate tasks.")
     else:
-        st.info("No tasks available. Start a scan to generate tasks.")
+        st.info("Task manager not initialized. Start a scan to generate tasks.")
 
-# 4) Logs Tab (was tab3 originally)
+# 4) Logs Tab
 with tab_logs:
     st.header("Execution Logs")
     
-    # Filter logs by level
+    # Filter logs by level; default shows INFO, WARNING, ERROR
     log_level_filter = st.multiselect("Filter by log level", 
                                       options=["INFO", "WARNING", "ERROR", "DEBUG"],
                                       default=["INFO", "WARNING", "ERROR"])
     
-    # Display logs with filter
     if st.session_state.logs:
         filtered_logs = [log for log in reversed(st.session_state.logs) 
                          if log["level"] in log_level_filter]
@@ -421,7 +432,7 @@ with tab_logs:
                 st.warning(f"**{log['timestamp']}** - {log['message']}")
             elif log["level"] == "INFO":
                 st.info(f"**{log['timestamp']}** - {log['message']}")
-            else:  # DEBUG
+            else:  # DEBUG or other levels
                 st.text(f"**{log['timestamp']}** - {log['message']}")
             
             if log["details"]:
