@@ -25,6 +25,7 @@ from scan.sqlmap_scan import SQLMapScanner
 from utils.task_manager import TaskManager, Task, TaskStatus
 from utils.scope import ScopeValidator
 from utils.logger import setup_logger
+from concurrent.futures import ThreadPoolExecutor
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -443,7 +444,6 @@ class CybersecurityWorkflow:
             state.task_manager = self.task_manager.to_dict()
             return state
 
-
     def _get_next_executable_task(self) -> Optional[Task]:
         try:
             for task in self.task_manager.get_all_tasks():
@@ -495,6 +495,79 @@ class CybersecurityWorkflow:
                 logger.warning(f"Task {task_id} not found, skipping execution")
                 return state
             
+            # Find all available tasks that can be run in parallel
+            parallel_tasks = [task]
+            
+            # Get additional tasks that have no dependencies or have all dependencies completed
+            if not hasattr(state, 'parallel_execution') or state.parallel_execution is True:
+                for other_task in self.task_manager.get_all_tasks():
+                    # Skip the current task and non-pending tasks
+                    if other_task.id == task_id or other_task.status != TaskStatus.PENDING:
+                        continue
+                    
+                    # Check if all dependencies are completed
+                    deps_satisfied = all(
+                        self.task_manager.get_task(dep_id) and 
+                        self.task_manager.get_task(dep_id).status == TaskStatus.COMPLETED 
+                        for dep_id in other_task.depends_on
+                    )
+                    
+                    # Add task to parallel execution list if dependencies are satisfied
+                    if deps_satisfied:
+                        parallel_tasks.append(other_task)
+                        
+                        # Limit parallel execution to a reasonable number (e.g., 3)
+                        if len(parallel_tasks) >= 3:
+                            break
+            
+            logger.info(f"Executing {len(parallel_tasks)} tasks in parallel")
+            
+            # Use ThreadPoolExecutor to run tasks in parallel
+            
+            with ThreadPoolExecutor(max_workers=len(parallel_tasks)) as executor:
+                # Start execution for each task
+                future_to_task = {
+                    executor.submit(
+                        self._execute_single_task, 
+                        t, 
+                        self.tools.get(t.tool)
+                    ): t for t in parallel_tasks
+                }
+                
+                # Process results as they complete
+                for future in future_to_task:
+                    task_result = future_to_task[future]
+                    try:
+                        result, execution_task = future.result()
+                        if execution_task.status == TaskStatus.COMPLETED:
+                            state.results[execution_task.id] = result
+                            logger.info(f"Task {execution_task.id} ({execution_task.name}) completed successfully")
+                        else:
+                            logger.warning(f"Task {execution_task.id} ({execution_task.name}) did not complete successfully: {execution_task.status}")
+                    except Exception as exc:
+                        logger.error(f"Task {task_result.id} generated an exception: {exc}")
+                        if not hasattr(task_result, 'errors'):
+                            task_result.errors = []
+                        task_result.errors.append(str(exc))
+                        task_result.status = TaskStatus.FAILED
+                        state.error_log.append(f"Error executing task {task_result.id}: {str(exc)}")
+            
+        except Exception as e:
+            error_msg = f"Error in parallel execution manager for task {task_id}: {str(e)}"
+            logger.error(error_msg)
+            state.error_log.append(error_msg)
+            
+        finally:
+            # Update the task manager state
+            state.task_manager = self.task_manager.to_dict()
+                        
+        return state
+        
+    def _execute_single_task(self, task, tool):
+        """Execute a single task and return its result."""
+        result = None
+        
+        try:
             # Initialize task properties
             task.status = TaskStatus.RUNNING
             task.started_at = self.task_manager.get_current_time()
@@ -504,14 +577,13 @@ class CybersecurityWorkflow:
             
             logger.info(f"Executing task: {task.name} (ID: {task.id}) with tool: {task.tool}")
             
-            # Get tool and validate parameters
-            tool = self.tools.get(task.tool)
+            # Validate tool
             if not tool:
                 raise ValueError(f"Tool '{task.tool}' not found")
             
             params = task.params.copy()
             
-            # Ensure a target is provided.
+            # Ensure a target is provided
             if not params.get("target") and not params.get("target_url"):
                 logger.error("Target parameter is missing.")
                 raise ValueError("Target parameter is missing.")
@@ -668,36 +740,29 @@ class CybersecurityWorkflow:
             # Save result and mark task as completed
             task.result = result
             task.status = TaskStatus.COMPLETED
-            state.results[task.id] = result
-            logger.info(f"Task {task.id} completed successfully")
             
         except Exception as e:
-            error_msg = f"Error executing task {task_id} ({task.name if task else 'unknown'}): {str(e)}"
+            error_msg = f"Error executing task {task.id} ({task.name}): {str(e)}"
             logger.error(error_msg)
-            if task:
-                task.status = TaskStatus.FAILED
-                task.errors.append(error_msg)
-                task.retry_count = getattr(task, 'retry_count', 0) + 1
-                if task.retry_count < getattr(task, 'max_retries', 3):
-                    task.status = TaskStatus.RETRYING
-                    retry_delay = min(2 ** task.retry_count, 60)
-                    logger.info(f"Retrying task {task.id} ({task.name}) in {retry_delay}s, attempt {task.retry_count}")
-                    
-                    if task.tool == "sqlmap" and task.retry_count == 1:
-                        task.params["risk"] = "1"
-                        task.params["level"] = "1"
-                        task.params.pop("dump-all", None)
-                        logger.info("Adjusting SQLMap parameters for retry to use more conservative settings")
-            state.error_log.append(error_msg)
+            task.status = TaskStatus.FAILED
+            task.errors.append(error_msg)
+            task.retry_count = getattr(task, 'retry_count', 0) + 1
+            if task.retry_count < getattr(task, 'max_retries', 3):
+                task.status = TaskStatus.RETRYING
+                retry_delay = min(2 ** task.retry_count, 60)
+                logger.info(f"Retrying task {task.id} ({task.name}) in {retry_delay}s, attempt {task.retry_count}")
+                
+                if task.tool == "sqlmap" and task.retry_count == 1:
+                    task.params["risk"] = "1"
+                    task.params["level"] = "1"
+                    task.params.pop("dump-all", None)
+                    logger.info("Adjusting SQLMap parameters for retry to use more conservative settings")
             
         finally:
-            if task:
-                self.task_manager.update_task(task)
-                state.task_manager = self.task_manager.to_dict()
-                        
-        return state
-
-
+            # Update the task in task manager
+            self.task_manager.update_task(task)
+            
+        return result, task
 
     def debug_scan_results(self, result: Any, task_id: str, tool_name: str) -> Any:
         try:
