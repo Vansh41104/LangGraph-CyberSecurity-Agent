@@ -52,17 +52,20 @@ Available tools:
 4. sqlmap - For testing SQL injection vulnerabilities
 
 TASK EXTRACTION INSTRUCTIONS:
-1. If TARGET SCOPE is empty or unspecified, extract the domain/IP/URL from the OBJECTIVE.
-2. Only create tasks that are explicitly mentioned or clearly implied in the objective.
-3. For each tool, create a task ONLY if it is explicitly specified or clearly required based on the objective.
-4. If a tool is not explicitly mentioned, infer the most relevant tool based on the context of the objective.
-5. Focus on the specific security assessment mentioned in the objective rather than creating a generic set of tasks.
+1. If TARGET SCOPE is empty or unspecified, extract ALL domains, IP addresses, and URLs from the OBJECTIVE.
+2. Recognize and properly handle both domain names (e.g., example.com) and IP addresses (e.g., 192.168.1.1).
+3. Only create tasks that are explicitly mentioned or clearly implied in the objective.
+4. For each tool, create a task ONLY if it is explicitly specified or clearly required based on the objective.
+5. If a tool is not explicitly mentioned, infer the most relevant tool based on the context of the objective.
+6. Focus on the specific security assessment mentioned in the objective rather than creating a generic set of tasks.
+7. For IP addresses, prioritize nmap for initial reconnaissance before using other tools.
+8. For web domains, ensure proper protocol prefixes (http:// or https://) are included in targets when required.
 
 Each task should have:
 - "name": A short descriptive name
 - "description": A detailed explanation
 - "tool": One of: "nmap", "gobuster", "ffuf", or "sqlmap"
-- "params": Parameters specific to the tool, always including "target"
+- "params": Parameters specific to the tool, always including "target" (can be domain name, IP address, or URL)
 - "depends_on": List of task IDs this task depends on (can be empty)
 
 IMPORTANT FORMATTING INSTRUCTIONS:
@@ -295,37 +298,56 @@ class CybersecurityWorkflow:
             return False
 
     def _decompose_tasks(self, state: AgentState) -> AgentState:
-            logger.info("Decomposing high-level objectives into tasks")
+        """Decompose high-level objectives into actionable tasks."""
+        logger.info("Decomposing high-level objectives into tasks")
 
-            # If state.task_manager already exists and contains tasks, skip task decomposition.
-            if state.task_manager and isinstance(state.task_manager, dict):
-                self.task_manager.from_dict(state.task_manager)
-                if self.task_manager.get_all_tasks():
-                    logger.info("Tasks already exist; skipping task decomposition.")
-                    return state
-            else:
-                self.task_manager = TaskManager()
+        # If state.task_manager already exists and contains tasks, skip task decomposition.
+        if state.task_manager and isinstance(state.task_manager, dict):
+            self.task_manager.from_dict(state.task_manager)
+            if self.task_manager.get_all_tasks():
+                logger.info("Tasks already exist; skipping task decomposition.")
+                return state
+        else:
+            self.task_manager = TaskManager()
 
-            # If no domains specified in scope, attempt to extract a domain from the objectives.
-            if not self.scope_validator.domains and not self.scope_validator.wildcard_domains:
-                domain_pattern = r'(https?://)?(?:www\.)?([\w.-]+\.[a-zA-Z]{2,})'
-                for obj in state.objectives:
-                    matches = re.finditer(domain_pattern, obj)
-                    for match in matches:
-                        extracted_domain = match.group(2)
-                        self.scope_validator.add_domain(extracted_domain)
-                        logger.info(f"Extracted domain {extracted_domain} from objective.")
+        # If no domains specified in scope, attempt to extract domains from the objectives.
+        if not self.scope_validator.domains and not self.scope_validator.wildcard_domains:
+            domain_pattern = r'(https?://)?(?:www\.)?([\w.-]+\.[a-zA-Z]{2,})'
+            for obj in state.objectives:
+                for match in re.finditer(domain_pattern, obj):
+                    extracted_domain = match.group(2)
+                    self.scope_validator.add_domain(extracted_domain)
+                    logger.info(f"Extracted domain {extracted_domain} from objective.")
 
-            # Construct the scope string based on the (possibly updated) scope.
-            domains = self.scope_validator.domains + self.scope_validator.wildcard_domains
-            ip_ranges = self.scope_validator.ip_ranges
-            scope_str = f"Domains: {', '.join(domains)}\nIP Ranges: {', '.join(map(str, ip_ranges))}"
+        # If no IP addresses are provided in scope, extract them from the objectives.
+        # (Assuming the ScopeValidator has an attribute "ips" for IP addresses.)
+        if not getattr(self.scope_validator, 'ips', []):
+            ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
+            for obj in state.objectives:
+                for match in re.finditer(ip_pattern, obj):
+                    ip_address = match.group()
+                    self.scope_validator.add_ip(ip_address)
+                    logger.info(f"Extracted IP address {ip_address} from objective.")
+
+        # Use the first domain or IP as fallback target.
+        if self.scope_validator.domains:
+            fallback_target = self.scope_validator.domains[0]
+        elif getattr(self.scope_validator, 'ips', []):
+            fallback_target = self.scope_validator.ips[0]
+        else:
+            fallback_target = "example.com"
+        web_target = fallback_target if fallback_target.startswith("http") else f"http://{fallback_target}"
+
+        # Construct the scope string based on the (possibly updated) scope.
+        domains = self.scope_validator.domains + self.scope_validator.wildcard_domains
+        ip_ranges = self.scope_validator.ip_ranges
+        scope_str = f"Domains: {', '.join(domains)}\nIP Ranges: {', '.join(map(str, ip_ranges))}"
 
             # Use the first domain as fallback target.
-            fallback_target = self.scope_validator.domains[0] if self.scope_validator.domains else "example.com"
-            web_target = fallback_target if fallback_target.startswith("http") else f"http://{fallback_target}"
+        fallback_target = self.scope_validator.domains[0] if self.scope_validator.domains else "example.com"
+        web_target = fallback_target if fallback_target.startswith("http") else f"http://{fallback_target}"
 
-            try:
+        try:
                 # Build prompt to generate tasks from high-level objectives.
                 prompt = ChatPromptTemplate.from_messages([
                     SystemMessage(content=(
@@ -437,12 +459,12 @@ class CybersecurityWorkflow:
                 else:
                     logger.info(f"Created {tasks_added} tasks from objectives.")
 
-            except Exception as e:
+        except Exception as e:
                 logger.error(f"Error decomposing tasks: {e}")
                 state.error_log.append(f"Error decomposing tasks: {e}")
 
-            state.task_manager = self.task_manager.to_dict()
-            return state
+        state.task_manager = self.task_manager.to_dict()
+        return state
 
     def _get_next_executable_task(self) -> Optional[Task]:
         try:
@@ -1380,7 +1402,7 @@ class CybersecurityWorkflow:
         try:
             compiled_workflow = self.workflow.compile()
             compiled_workflow.recursion_limit = 10000
-            final_state = compiled_workflow.invoke(initial_state, config={"recursion_limit": 50})
+            final_state = compiled_workflow.invoke(initial_state, config={"recursion_limit": 10000})
 
             if "results" not in final_state:
                 final_state["results"] = {}

@@ -98,13 +98,16 @@ class ScopeValidator:
         try:
             ip_obj = ipaddress.IPv4Address(ip)
             ip_str = str(ip_obj)
-            # Check for a direct IP match (if stored as a string)
-            if ip_str in self.allowed_ips:
-                return True
-            # Check if IP falls within any allowed IP range
-            for network in self.allowed_ips:
-                if isinstance(network, ipaddress.IPv4Network) and ip_obj in network:
-                    return True
+            
+            for item in self.allowed_ips:
+                if isinstance(item, str):
+                    # Check for direct match with string IPs
+                    if ip_str == item:
+                        return True
+                elif isinstance(item, ipaddress.IPv4Network):
+                    # Check if IP is in a network range
+                    if ip_obj in item:
+                        return True
             return False
         except ValueError:
             logger.error(f"Invalid IP format for validation: {ip}")
