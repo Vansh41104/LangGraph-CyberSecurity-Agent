@@ -6,6 +6,7 @@ WORKDIR /app
 
 # Copy the current directory contents into the container at /app
 COPY . /app
+COPY .env /app/.env
 
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
@@ -19,4 +20,4 @@ RUN apt-get update && \
 EXPOSE 8501
 
 # Run streamlit app when the container launches
-CMD ["python3", "main.py", "--streamlit"]
+CMD ["python", "main.py", "--streamlit"]

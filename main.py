@@ -13,6 +13,10 @@ from langgraph.workflow import CybersecurityWorkflow
 
 # Set up logging
 from utils.logger import setup_logger
+from dotenv import load_dotenv
+
+load_dotenv()
+
 logger = setup_logger()
 
 def parse_args():

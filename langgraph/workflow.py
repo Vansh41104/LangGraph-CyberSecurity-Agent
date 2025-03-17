@@ -1355,7 +1355,15 @@ class CybersecurityWorkflow:
                         if 'ports_summary' in host:
                             task_result += f"{host['ports_summary']}\n"
             findings.append(task_result)
-        content = f"""# Security Assessment Report
+            #   Precompute values to simplify the f-string
+            findings_text = "\n".join(findings) if findings else "No findings available."
+            all_tasks = self.task_manager.get_all_tasks()
+            total_tasks = len(all_tasks)
+            completed_tasks = len([t for t in all_tasks if t.status == TaskStatus.COMPLETED])
+            failed_tasks = len([t for t in all_tasks if t.status == TaskStatus.FAILED])
+            skipped_tasks = len([t for t in all_tasks if t.status == TaskStatus.SKIPPED])
+
+            content = f"""# Security Assessment Report
 
             ## Scope
             {scope_str}
@@ -1364,13 +1372,13 @@ class CybersecurityWorkflow:
             This report contains basic findings from the security assessment. A detailed analysis could not be generated.
 
             ## Findings
-            {("\n".join(findings)) if findings else "No findings available."}
+            {findings_text}
 
             ## Execution Summary
-            - Total Tasks: {len(self.task_manager.get_all_tasks())}
-            - Completed: {len([t for t in self.task_manager.get_all_tasks() if t.status == TaskStatus.COMPLETED])}
-            - Failed: {len([t for t in self.task_manager.get_all_tasks() if t.status == TaskStatus.FAILED])}
-            - Skipped: {len([t for t in self.task_manager.get_all_tasks() if t.status == TaskStatus.SKIPPED])}
+            - Total Tasks: {total_tasks}
+            - Completed: {completed_tasks}
+            - Failed: {failed_tasks}
+            - Skipped: {skipped_tasks}
             """
         return {
             "content": content,
