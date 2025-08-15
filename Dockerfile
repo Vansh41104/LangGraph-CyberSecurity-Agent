@@ -20,9 +20,11 @@ RUN git clone --depth 1 https://github.com/ffuf/ffuf.git && \
 FROM python:3.10-slim
 WORKDIR /app
 
-# Copy your application code and environment file
-COPY . /app
 COPY .env .
+
+# Copy your application code
+COPY . /app
+
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
