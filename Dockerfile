@@ -6,8 +6,9 @@ WORKDIR /build
 RUN apk add --no-cache git
 
 # Build gobuster
-RUN git clone --depth 1 https://github.com/OJ/gobuster.git && \
+RUN git clone https://github.com/OJ/gobuster.git && \
     cd gobuster && \
+    git checkout v3.5.0 && \
     go build -o gobuster .
 
 # Build ffuf
@@ -21,7 +22,7 @@ WORKDIR /app
 
 # Copy your application code and environment file
 COPY . /app
-COPY .env /app/.env
+COPY .env .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
