@@ -9,9 +9,13 @@ import json
 # Import the components of the system
 from utils.task_manager import TaskManager
 from utils.scope import ScopeValidator
-from langgraph.workflow import CybersecurityWorkflow
+try:
+    from langgraph.multi_agent_workflow import MultiAgentWorkflow
+    USE_MULTI_AGENT = True
+except ImportError:
+    from langgraph.workflow import CybersecurityWorkflow
+    USE_MULTI_AGENT = False
 
-# Set up logging
 from utils.logger import setup_logger
 from dotenv import load_dotenv
 
@@ -20,10 +24,8 @@ load_dotenv()
 logger = setup_logger()
 
 def parse_args():
-    """Parse command line arguments"""
     parser = argparse.ArgumentParser(description="Agentic Cybersecurity Pipeline")
     
-    # Define command line arguments
     parser.add_argument("-t", "--task", help="Security task description (e.g., 'Scan for open ports')")
     parser.add_argument("-d", "--domains", nargs="+", default=[], help="Target domains (e.g., example.com *.example.org)")
     parser.add_argument("-i", "--ip-ranges", nargs="+", default=[], help="Target IP ranges (e.g., 192.168.1.0/24 10.0.0.1)")
@@ -35,7 +37,6 @@ def parse_args():
     return parser.parse_args()
 
 def validate_inputs(args):
-    """Validate command line inputs"""
     if not args.domains and not args.ip_ranges:
         logger.error("At least one domain or IP range must be specified")
         return False
@@ -43,22 +44,25 @@ def validate_inputs(args):
     return True
 
 def run_workflow(security_task, domains, ip_ranges, stream=False):
-    """Run the cybersecurity workflow with given inputs"""
     try:
         logger.info(f"Starting cybersecurity pipeline with task: {security_task}")
         logger.info(f"Target scope: domains={domains}, ip_ranges={ip_ranges}")
         
-        # Initialize the workflow
-        workflow = CybersecurityWorkflow()
+        if USE_MULTI_AGENT:
+            logger.info("Using Multi-Agent Architecture")
+            workflow = MultiAgentWorkflow(parallel_execution=True)
+        else:
+            logger.info("Using Legacy Workflow")
+            workflow = CybersecurityWorkflow()
+        
         result = workflow.run(
-            objectives=[security_task],  # Changed from fixed list to the actual security task
+            objectives=[security_task],
             scope_config={
                 "domains": domains,
                 "ip_ranges": ip_ranges
             }
         )
         
-        # Return the result directly from the workflow run
         return result
         
     except Exception as e:
@@ -83,7 +87,6 @@ def generate_report(task_manager):
         "tasks": []
     }
     
-    # Add task details
     for task in tasks:
         task_details = {
             "id": task.id,
@@ -98,11 +101,8 @@ def generate_report(task_manager):
         }
         report["tasks"].append(task_details)
         
-        # Check for vulnerabilities in task results
         if task.status.name == "COMPLETED" and task.result:
-            # Parse the result for vulnerability information
             try:
-                # This is a simplified example - you would need to parse actual tool outputs
                 if 'vulnerability' in str(task.result).lower() or 'open port' in str(task.result).lower():
                     report["vulnerabilities"].append({
                         "task_id": task.id,
@@ -129,7 +129,6 @@ def save_report(report, output_file=None):
         return False
 
 def launch_streamlit():
-    """Launch the Streamlit UI"""
     try:
         import subprocess
         streamlit_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "streamlit_app", "app.py")
@@ -141,7 +140,6 @@ def launch_streamlit():
         print("To launch Streamlit manually, run: streamlit run streamlit_app/app.py")
 
 def print_example_commands():
-    """Print example commands for reference"""
     print("\nExample commands:")
     print("-----------------")
     print("1. Scan a single domain for open ports:")
@@ -158,26 +156,20 @@ def print_example_commands():
     print()
 
 def main():
-    """Main entry point for the cybersecurity pipeline"""
-    # Parse command line arguments
     args = parse_args()
     
-    # Set logging level
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # Launch Streamlit UI if requested
     if args.streamlit:
         launch_streamlit()
         return
     
-    # Validate inputs
     if not validate_inputs(args):
         print("Invalid inputs. Please check command line arguments.")
         print_example_commands()
         return
     
-    # Run the workflow
     result = run_workflow(
         security_task=args.task,
         domains=args.domains,
@@ -185,12 +177,10 @@ def main():
         stream=args.stream
     )
     
-    # Process the workflow result
     if result and "report" in result:
         report = result["report"]
         save_report(report, args.output)
         
-        # Print summary to console
         print("\nExecution Summary:")
         print("-----------------")
         if "execution_summary" in report:
@@ -199,7 +189,6 @@ def main():
             print(f"Failed Tasks: {report['execution_summary']['failed_tasks']}")
             print(f"Skipped Tasks: {report['execution_summary']['skipped_tasks']}")
         
-        # Display report content
         print("\nReport Content:")
         print("--------------")
         print(report.get("content", "No content available"))

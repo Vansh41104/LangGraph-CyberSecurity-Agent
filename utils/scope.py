@@ -21,10 +21,6 @@ class ScopeValidator:
         return self.allowed_ips
 
     def add_domain(self, domain: str):
-        """Add a domain to the allowed scope.
-        
-        If the domain starts with a dot, it will be treated as a wildcard and passed to add_wildcard_domain.
-        """
         domain = domain.lower().strip()
         if domain.startswith("."):
             self.add_wildcard_domain(domain)
@@ -36,10 +32,6 @@ class ScopeValidator:
                 logger.info(f"Domain {domain} is already in scope")
 
     def add_wildcard_domain(self, wildcard: str):
-        """Add a wildcard domain to the allowed scope.
-        
-        The wildcard should start with a dot (e.g. '.example.com').
-        """
         wildcard = wildcard.lower().strip()
         if not wildcard.startswith("."):
             wildcard = "." + wildcard
@@ -50,7 +42,6 @@ class ScopeValidator:
             logger.info(f"Wildcard domain {wildcard} is already in scope")
 
     def add_ip(self, ip: str):
-        """Add a single IP to the allowed scope."""
         try:
             ip_obj = ipaddress.IPv4Address(ip)
             ip_str = str(ip_obj)
@@ -64,7 +55,6 @@ class ScopeValidator:
             raise ValueError(f"Invalid IP format: {ip}")
 
     def add_ip_range(self, ip_range: str):
-        """Add an IP range (in CIDR notation) to the allowed scope."""
         try:
             network = ipaddress.IPv4Network(ip_range, strict=False)
             if network not in self.allowed_ips:
@@ -77,14 +67,12 @@ class ScopeValidator:
             raise ValueError(f"Invalid IP range format: {ip_range}")
 
     def clear_scope(self):
-        """Clear all scope definitions."""
         self.allowed_domains = []
         self.allowed_ips = []
         self.wildcard_domains = []
         logger.info("Cleared all scope definitions")
 
     def is_domain_in_scope(self, domain: str) -> bool:
-        """Check if a domain is within the allowed scope."""
         domain = domain.lower().strip()
         if domain in self.allowed_domains:
             return True
@@ -94,18 +82,15 @@ class ScopeValidator:
         return False
 
     def is_ip_in_scope(self, ip: str) -> bool:
-        """Check if an IP is within the allowed scope."""
         try:
             ip_obj = ipaddress.IPv4Address(ip)
             ip_str = str(ip_obj)
             
             for item in self.allowed_ips:
                 if isinstance(item, str):
-                    # Check for direct match with string IPs
                     if ip_str == item:
                         return True
                 elif isinstance(item, ipaddress.IPv4Network):
-                    # Check if IP is in a network range
                     if ip_obj in item:
                         return True
             return False
@@ -114,49 +99,26 @@ class ScopeValidator:
             return False
 
     def is_target_in_scope(self, target: str) -> bool:
-        """
-        Check if a target (domain or IP) is within the allowed scope.
-        
-        Args:
-            target (str): A domain name or IP address.
-        
-        Returns:
-            bool: True if the target is within scope, False otherwise.
-        """
         target = target.lower().strip()
-        # Remove protocol, path, and port if present
         if "://" in target:
             target = target.split("://")[1]
         target = target.split("/")[0]
         target = target.split(":")[0]
         
-        # If the target looks like an IP (optionally with CIDR notation), check IP scope
         if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?$", target):
-            ip = target.split('/')[0]  # Remove any CIDR notation for validation
+            ip = target.split('/')[0]
             return self.is_ip_in_scope(ip)
         else:
             return self.is_domain_in_scope(target)
 
     def get_scope_summary(self) -> Dict[str, List[str]]:
-        """Return a summary of the current scope."""
         return {
             "domains": self.allowed_domains,
             "wildcard_domains": self.wildcard_domains,
-            "ips": [str(ip) for ip in self.allowed_ips]  # Convert networks to strings
+            "ips": [str(ip) for ip in self.allowed_ips]
         }
 
     def load_scope_from_config(self, config: Dict[str, List[str]]):
-        """
-        Load scope definitions from a configuration dictionary.
-        
-        The config dictionary can have the following keys:
-          - 'domains': a list of domain names.
-          - 'wildcard_domains': a list of wildcard domains.
-          - 'ips': a list of IPs or CIDR ranges.
-        
-        Args:
-            config (Dict[str, List[str]]): The configuration dictionary.
-        """
         self.clear_scope()
         for domain in config.get("domains", []):
             self.add_domain(domain)
@@ -170,15 +132,6 @@ class ScopeValidator:
         logger.info(f"Loaded scope from config: {len(self.allowed_domains)} domains, {len(self.allowed_ips)} IPs/ranges")
 
     def validate_task_target(self, task: Dict[str, Any]) -> bool:
-        """
-        Validate if the target in a task is within the allowed scope.
-        
-        Args:
-            task (Dict[str, Any]): A task dictionary with a 'params' key that may contain target information.
-        
-        Returns:
-            bool: True if the task's target is within scope, False otherwise.
-        """
         target = None
         if "params" in task:
             target = task["params"].get("target") or task["params"].get("domain") or task["params"].get("url")
@@ -186,18 +139,7 @@ class ScopeValidator:
             logger.warning(f"No target found in task: {task.get('name', 'unnamed')}")
             return False
 
-        # Normalize and validate the target
         return self.is_target_in_scope(target)
         
     def is_in_scope(self, target: str) -> bool:
-        """
-        Check if a target is within the allowed scope.
-        This is an alias for is_target_in_scope.
-        
-        Args:
-            target (str): A domain name or IP address.
-        
-        Returns:
-            bool: True if the target is within scope, False otherwise.
-        """
         return self.is_target_in_scope(target)

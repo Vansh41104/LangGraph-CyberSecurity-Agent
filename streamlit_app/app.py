@@ -6,14 +6,12 @@ import sys
 import os
 from datetime import datetime
 
-# Add parent directory to path to import from other modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.task_manager import Task, TaskManager, TaskStatus
 from utils.scope import ScopeValidator
 from langgraph.workflow import CybersecurityWorkflow
 
-# Page configuration
 st.set_page_config(
     page_title="Cybersecurity Pipeline",
     page_icon="🔐",
@@ -21,7 +19,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize session state variables if they don't exist
 if 'task_manager' not in st.session_state:
     st.session_state.task_manager = None
 if 'workflow' not in st.session_state:
@@ -37,29 +34,23 @@ if 'final_report' not in st.session_state:
 if 'scan_history' not in st.session_state:
     st.session_state.scan_history = []
 
-# Functions to manage workflow execution
 def start_workflow(security_task, domains, ip_ranges):
     """Start the cybersecurity workflow with defined scope"""
     try:
-        # Initialize scope validator and add domains/IP ranges
         st.session_state.scope_validator = ScopeValidator()
         for domain in domains:
             st.session_state.scope_validator.add_domain(domain)
         for ip in ip_ranges:
             st.session_state.scope_validator.add_ip_range(ip)
         
-        # Initialize task manager
         st.session_state.task_manager = TaskManager()
         
-        # Initialize workflow (which will use the internal task manager and scope validator)
         st.session_state.workflow = CybersecurityWorkflow()
         
-        # Reset logs and state
         st.session_state.logs = []
         st.session_state.final_report = None
         st.session_state.is_running = True
         
-        # Log the starting of the workflow
         log_entry = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "level": "INFO",
@@ -68,20 +59,17 @@ def start_workflow(security_task, domains, ip_ranges):
         }
         st.session_state.logs.append(log_entry)
         
-        # Run the workflow (the run method returns a dict with keys "report", "results", etc.)
         result = st.session_state.workflow.run(
             [security_task],
             {
                 "domains": domains,
                 "ip_ranges": ip_ranges,
-                "wildcard_domains": []  # Adjust if needed
+                "wildcard_domains": []
             }
         )
         
-        # Save final report from the workflow run
         st.session_state.final_report = result.get("report", {})
         
-        # Add entry to scan history and mark it as completed
         history_entry = {
             "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "task": security_task,
@@ -102,12 +90,10 @@ def start_workflow(security_task, domains, ip_ranges):
 def stop_workflow():
     """Stop the current workflow execution"""
     if st.session_state.is_running:
-        # Update the last scan history entry
         if st.session_state.scan_history:
             st.session_state.scan_history[-1]["status"] = "Stopped"
             st.session_state.scan_history[-1]["end_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # Log the stopping of the workflow
         log_entry = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "level": "WARNING",
@@ -116,10 +102,8 @@ def stop_workflow():
         }
         st.session_state.logs.append(log_entry)
         
-        # Generate partial report
         generate_report()
         
-        # Reset running state
         st.session_state.is_running = False
 
 def generate_report():
@@ -170,37 +154,30 @@ def add_log(level, message, details=""):
     }
     st.session_state.logs.append(log_entry)
 
-# Sidebar for configuration and controls
 with st.sidebar:
     st.title("🔐 Cybersecurity Pipeline")
     
-    # Configuration Section
     st.header("Scan Configuration")
     
-    # Target Scope Definition
     st.subheader("Target Scope")
     domains_input = st.text_area("Domains (one per line)", 
                                  help="Enter target domains, e.g., example.com, *.example.org")
     ip_ranges_input = st.text_area("IP Ranges (one per line)", 
                                   help="Enter target IP ranges, e.g., 192.168.1.0/24")
     
-    # Security Task Definition
     st.subheader("Security Task")
     security_task = st.text_area("Describe the security task", 
                                  placeholder="e.g., Scan example.com for open ports and discover directories")
     
-    # Control Buttons
     st.subheader("Controls")
     col1, col2 = st.columns(2)
     
     with col1:
         if not st.session_state.is_running:
             if st.button("Start Scan", key="start_btn", use_container_width=True):
-                # Parse the domains and IP ranges
                 domains = [d.strip() for d in domains_input.split('\n') if d.strip()]
                 ip_ranges = [ip.strip() for ip in ip_ranges_input.split('\n') if ip.strip()]
                 
-                # Validate inputs
                 if not domains and not ip_ranges:
                     st.error("Please define at least one domain or IP range.")
                 elif not security_task:
@@ -213,10 +190,9 @@ with st.sidebar:
             if st.button("Stop Scan", key="stop_btn", use_container_width=True):
                 stop_workflow()
     
-    # History Section
     if st.session_state.scan_history:
         st.subheader("Scan History")
-        for i, entry in enumerate(st.session_state.scan_history[-5:]):  # Show only the last 5 entries
+        for i, entry in enumerate(st.session_state.scan_history[-5:]):
             with st.expander(f"{entry['start_time']} - {entry['task'][:20]}..."):
                 st.write(f"**Status:** {entry['status']}")
                 st.write(f"**Start Time:** {entry['start_time']}")
@@ -229,14 +205,10 @@ with st.sidebar:
                 for ip_range in entry['ip_ranges']:
                     st.write(f"- {ip_range}")
 
-# ─────────────────────────────────────────────────────────────────────────────────────────
-# Reordering Tabs so that the "Security Audit Report" is first:
-# ─────────────────────────────────────────────────────────────────────────────────────────
 tab_report, tab_dashboard, tab_tasks, tab_logs = st.tabs(
     ["Security Audit Report", "Dashboard", "Task List", "Logs"]
 )
 
-# 1) Report Tab
 with tab_report:
     st.header("Security Audit Report")
     
@@ -245,7 +217,6 @@ with tab_report:
         
         st.subheader(f"Report Generated: {report.get('timestamp', 'Unknown')}")
         
-        # If an execution summary is available, display key metrics
         if 'execution_summary' in report:
             summary = report['execution_summary']
             col1, col2, col3, col4 = st.columns(4)
@@ -258,10 +229,8 @@ with tab_report:
             with col4:
                 st.metric("Pending", summary.get("pending_tasks", "N/A"))
         
-        # Display the report content (Markdown)
         st.markdown(report.get("content", "No report content available."))
         
-        # Export options
         col1, col2 = st.columns(2)
         with col1:
             report_json = json.dumps(report, indent=2)
@@ -282,11 +251,9 @@ with tab_report:
     else:
         st.info("No report available. Complete a scan to generate a report.")
 
-# 2) Dashboard Tab
 with tab_dashboard:
     st.header("Cybersecurity Pipeline Dashboard")
     
-    # Status indicators
     col1, col2, col3 = st.columns(3)
     
     with col1:
@@ -328,7 +295,6 @@ with tab_dashboard:
     else:
         st.info("No scope defined. Configure and start a scan to define the scope.")
     
-    # Live task monitoring
     if st.session_state.task_manager is not None:
         st.subheader("Live Task Monitoring")
         tasks = st.session_state.task_manager.get_all_tasks()
@@ -343,7 +309,6 @@ with tab_dashboard:
         else:
             st.info("No tasks are currently running.")
         
-        # Visualize task status breakdown using a bar chart
         statuses = [t.status.name for t in tasks]
         status_counts = {
             "PENDING": statuses.count("PENDING"),
@@ -360,7 +325,6 @@ with tab_dashboard:
     else:
         st.info("Task manager not initialized. Start a scan to generate tasks.")
 
-# 3) Task List Tab
 with tab_tasks:
     st.header("Task List")
     
@@ -368,7 +332,6 @@ with tab_tasks:
         tasks = st.session_state.task_manager.get_all_tasks()
         
         if tasks:
-            # Group tasks by status
             completed_tasks = [t for t in tasks if t.status == TaskStatus.COMPLETED]
             running_tasks = [t for t in tasks if t.status == TaskStatus.RUNNING]
             pending_tasks = [t for t in tasks if t.status == TaskStatus.PENDING]

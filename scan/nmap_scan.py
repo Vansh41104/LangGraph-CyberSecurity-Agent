@@ -10,18 +10,8 @@ from utils.retry import retry_operation
 logger = logging.getLogger(__name__)
 
 class NmapScanner:
-    """
-    Wrapper for the nmap security scanner with enhanced error handling and result parsing.
-    """
 
     def __init__(self, binary_path: str = "nmap", sudo: bool = False):
-        """
-        Initialize the NmapScanner.
-
-        Args:
-            binary_path: Path to the nmap executable.
-            sudo: Whether to run nmap with sudo for privileged operations.
-        """
         self.binary_path = binary_path
         self.sudo = sudo
         self.verify_installation()
@@ -50,18 +40,6 @@ class NmapScanner:
         arguments: str,
         xml_output_path: str,
     ) -> List[str]:
-        """
-        Build the nmap command with appropriate arguments.
-
-        Args:
-            target: Target to scan.
-            ports: Ports to scan.
-            arguments: Additional nmap arguments.
-            xml_output_path: Path to save XML output.
-
-        Returns:
-            List of command elements.
-        """
         cmd = []
         if self.sudo:
             cmd.append("sudo")
@@ -89,20 +67,6 @@ class NmapScanner:
         timeout: int = 300,
         scan_type: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        Run an nmap scan against a target.
-
-        Args:
-            target: The target to scan (IP, domain, CIDR range, or list of targets).
-            ports: The ports to scan (e.g., "22,80,443" or "1-1000").
-            arguments: Additional nmap arguments (default: "-sV -sC").
-            command: Alternate scan command to use (overrides arguments if provided).
-            timeout: Timeout for the scan in seconds.
-            scan_type: Type of scan to perform (e.g., "quick", "service", "vulnerability").
-
-        Returns:
-            dict: Parsed scan results.
-        """
         if not target:
             logger.error("No target specified for nmap scan")
             raise ValueError("No target specified for nmap scan")
@@ -144,16 +108,6 @@ class NmapScanner:
                 logger.warning(f"Failed to remove temporary file {xml_output_path}: {e}")
 
     def _get_arguments_for_scan_type(self, scan_type: str, default_args: str) -> str:
-        """
-        Get appropriate arguments for the specified scan type.
-
-        Args:
-            scan_type: Type of scan to perform.
-            default_args: Default arguments if scan_type is not recognized.
-
-        Returns:
-            String of nmap arguments.
-        """
         scan_types = {
             "quick": "-sn",
             "ping": "-sn",
@@ -172,15 +126,6 @@ class NmapScanner:
         return scan_types.get(scan_type.lower(), default_args)
 
     def _parse_xml_output(self, xml_file: str) -> Dict[str, Any]:
-        """
-        Parse nmap XML output file.
-
-        Args:
-            xml_file: Path to the XML output file.
-
-        Returns:
-            Dictionary of parsed results.
-        """
         if not os.path.exists(xml_file):
             logger.error(f"XML output file not found: {xml_file}")
             return {"error": "XML output file not found"}
@@ -225,7 +170,6 @@ class NmapScanner:
                 for extraports in ports_elem.findall("extraports"):
                     host_data.setdefault("extraports", []).append(extraports.attrib)
                 for port in ports_elem.findall("port"):
-                    # Instead of storing the full attrib dict, extract specific keys:
                     port_data = {
                         "id": port.attrib.get("portid", "unknown"),
                         "protocol": port.attrib.get("protocol", "unknown"),
@@ -276,15 +220,6 @@ class NmapScanner:
         return results
 
     def _parse_script_table(self, table_elem: ET.Element) -> Union[Dict[str, Any], List[Any]]:
-        """
-        Recursively parse a script table element.
-
-        Args:
-            table_elem: Table XML element.
-
-        Returns:
-            Parsed table data as a dictionary or list.
-        """
         if "key" in table_elem.attrib:
             result = {}
             for elem in table_elem:
@@ -312,7 +247,7 @@ class NmapScanner:
             for port in host.get("ports", []):
                 state = port.get("state", {}).get("state")
                 if state == "open":
-                    port_number = port.get("id")  # Now this is directly the portid string
+                    port_number = port.get("id")
                     protocol = port.get("protocol")
                     service_data = port.get("service", {})
                     port_info = {

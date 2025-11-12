@@ -10,24 +10,14 @@ from utils.retry import retry_operation
 logger = logging.getLogger(__name__)
 
 class FFUFScanner:
-    """
-    Wrapper for ffuf to perform web fuzzing.
-    """
 
     def __init__(self, binary_path: str = "ffuf", sudo: bool = False):
-        """
-        Initialize the FFUFScanner.
 
-        Args:
-            binary_path: Path to the ffuf executable.
-            sudo: Whether to run ffuf with sudo.
-        """
         self.binary_path = binary_path
         self.sudo = sudo
         self.verify_installation()
 
     def verify_installation(self):
-        """Verify that ffuf is installed and accessible."""
         cmd = [self.binary_path, "-V"]
         if self.sudo:
             cmd.insert(0, "sudo")
@@ -53,28 +43,12 @@ class FFUFScanner:
         output_file: str,
         output_format: str = "json"
     ) -> List[str]:
-        """
-        Build the ffuf command.
-
-        Args:
-            target: Target URL with FUZZ placeholder (e.g., http://example.com/FUZZ).
-            wordlist: Path to wordlist file.
-            extensions: Comma-separated list of file extensions (optional).
-            threads: Number of threads.
-            extra_args: Additional arguments.
-            output_file: Path to store output.
-            output_format: Output format, default is json.
-
-        Returns:
-            List of command elements.
-        """
         cmd = []
         if self.sudo:
             cmd.append("sudo")
         cmd.append(self.binary_path)
         cmd.extend(["-u", target])
         cmd.extend(["-w", wordlist])
-        # If the target is meant for directory enumeration (ends with FUZZ), do not include extensions.
         if extensions and not target.rstrip("/").endswith("FUZZ"):
             cmd.extend(["-e", extensions])
         cmd.extend(["-t", str(threads)])
@@ -94,22 +68,6 @@ class FFUFScanner:
         timeout: int = 300,
         output_format: str = "json"
     ) -> Dict[str, Any]:
-        """
-        Run an ffuf scan against the target.
-
-        Args:
-            target: URL with FUZZ placeholder.
-            wordlist: Path to wordlist.
-            extensions: Comma-separated list of file extensions (optional).
-            threads: Number of threads.
-            extra_args: Additional ffuf arguments.
-            timeout: Timeout in seconds.
-            output_format: Output format (default json).
-
-        Returns:
-            Parsed scan results as dictionary.
-        """
-        # Check if the specified wordlist exists; if not, use fallback paths.
         if not os.path.exists(wordlist):
             fallback_paths = [
                 wordlist,

@@ -4,7 +4,6 @@ import os
 import ipaddress
 from unittest.mock import patch, MagicMock
 
-# Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.scope import ScopeValidator
@@ -18,17 +17,13 @@ def empty_validator():
 def populated_validator():
     """Fixture for a pre-populated ScopeValidator with domains and IPs"""
     validator = ScopeValidator()
-    # Add regular domains
     validator.add_domain("example.com")
     validator.add_domain("test.org")
     
-    # Add wildcard domain
     validator.add_wildcard_domain(".wildcard.net")
     
-    # Add IP address
     validator.add_ip("10.0.0.1")
     
-    # Add IP range
     validator.add_ip_range("192.168.1.0/24")
     validator.add_ip_range("172.16.0.0/16")
     
@@ -44,7 +39,6 @@ class TestScopeValidator:
         assert validator.wildcard_domains == []
         assert validator.enabled is True
         
-        # Test property getters
         assert validator.domains == []
         assert validator.ip_ranges == []
     
@@ -56,7 +50,6 @@ class TestScopeValidator:
         assert "example.com" in validator.allowed_domains
         assert len(validator.allowed_domains) == 1
         
-        # Add another domain
         validator.add_domain("test.org")
         assert "test.org" in validator.allowed_domains
         assert len(validator.allowed_domains) == 2
@@ -65,17 +58,14 @@ class TestScopeValidator:
         """Test adding wildcard domains with and without leading dot"""
         validator = empty_validator
         
-        # With dot prefix
         validator.add_wildcard_domain(".example.com")
         assert ".example.com" in validator.wildcard_domains
         assert len(validator.wildcard_domains) == 1
         
-        # Without dot prefix (should add the dot)
         validator.add_wildcard_domain("test.org")
         assert ".test.org" in validator.wildcard_domains
         assert len(validator.wildcard_domains) == 2
         
-        # Test automatic conversion via add_domain
         validator.add_domain(".wildcard.net")
         assert ".wildcard.net" in validator.wildcard_domains
         assert len(validator.wildcard_domains) == 3
@@ -88,7 +78,6 @@ class TestScopeValidator:
         assert "192.168.1.1" in validator.allowed_ips
         assert len(validator.allowed_ips) == 1
         
-        # Test with different IP format
         validator.add_ip("10.0.0.1")
         assert "10.0.0.1" in validator.allowed_ips
         assert len(validator.allowed_ips) == 2
@@ -112,7 +101,6 @@ class TestScopeValidator:
         assert isinstance(validator.allowed_ips[0], ipaddress.IPv4Network)
         assert str(validator.allowed_ips[0]) == "192.168.1.0/24"
         
-        # Add another range
         validator.add_ip_range("10.0.0.0/16")
         assert len(validator.allowed_ips) == 2
         assert str(validator.allowed_ips[1]) == "10.0.0.0/16"
@@ -131,14 +119,12 @@ class TestScopeValidator:
         """Test clearing all scope definitions"""
         validator = populated_validator
         
-        # Verify validator is populated first
         assert len(validator.domains) > 0
         assert len(validator.ip_ranges) > 0
         assert len(validator.wildcard_domains) > 0
         
         validator.clear_scope()
         
-        # Verify everything is cleared
         assert validator.allowed_domains == []
         assert validator.allowed_ips == []
         assert validator.wildcard_domains == []
@@ -147,15 +133,12 @@ class TestScopeValidator:
         """Test checking if domains are in scope"""
         validator = populated_validator
         
-        # Direct matches
         assert validator.is_domain_in_scope("example.com") is True
         assert validator.is_domain_in_scope("test.org") is True
         
-        # Wildcard matches
         assert validator.is_domain_in_scope("sub.wildcard.net") is True
         assert validator.is_domain_in_scope("test.wildcard.net") is True
         
-        # Out of scope
         assert validator.is_domain_in_scope("malicious.com") is False
         assert validator.is_domain_in_scope("example.net") is False
         assert validator.is_domain_in_scope("wildcard.com") is False
@@ -184,15 +167,12 @@ class TestScopeValidator:
         """Test checking if targets (domain or IP) are in scope"""
         validator = populated_validator
         
-        # Domain targets
         assert validator.is_target_in_scope("example.com") is True
         assert validator.is_target_in_scope("sub.wildcard.net") is True
         
-        # IP targets
         assert validator.is_target_in_scope("10.0.0.1") is True
         assert validator.is_target_in_scope("192.168.1.100") is True
         
-        # Out of scope
         assert validator.is_target_in_scope("malicious.com") is False
         assert validator.is_target_in_scope("8.8.8.8") is False
     

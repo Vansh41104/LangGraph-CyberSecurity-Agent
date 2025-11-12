@@ -27,9 +27,7 @@ def retry_operation(
     Returns:
         The decorated function.
     """
-    # Use retry_exceptions if provided, otherwise default to exceptions_to_catch.
     catch_exceptions = retry_exceptions if retry_exceptions is not None else exceptions_to_catch
-    # If nothing provided, default to catching all exceptions.
     if catch_exceptions is None:
         catch_exceptions = (Exception,)
     
@@ -43,28 +41,22 @@ def retry_operation(
                 try:
                     return func(*args, **kwargs)
                 except catch_exceptions as e:
-                    # Check if we've reached max retries.
                     if retries >= max_retries:
                         logger.error(f"Max retries ({max_retries}) exceeded for {func.__name__}: {str(e)}")
                         raise
                     
-                    # Check if we should retry this specific exception.
                     if should_retry_fn and not should_retry_fn(e):
                         logger.info(f"Not retrying {func.__name__} based on should_retry_fn: {str(e)}")
                         raise
                     
-                    # Increment retry counter.
                     retries += 1
                     
-                    # Log the retry.
                     logger.warning(
                         f"Retry {retries}/{max_retries} for {func.__name__} after error: {str(e)}"
                     )
                     
-                    # Wait before retrying.
                     time.sleep(current_delay)
                     
-                    # Increase delay for next retry (exponential backoff).
                     current_delay *= backoff_factor
         return wrapper
     return decorator
@@ -108,13 +100,10 @@ class RetryHandler:
         
         while True:
             try:
-                # Execute the function.
                 result = func(*args, **kwargs)
                 
-                # Calculate execution time.
                 execution_time = time.time() - start_time
                 
-                # Return success result.
                 return {
                     "success": True,
                     "result": result,
@@ -124,12 +113,9 @@ class RetryHandler:
                 }
                 
             except exceptions_to_catch as e:
-                # Check if we've reached max retries.
                 if retries >= max_retries:
-                    # Calculate execution time.
                     execution_time = time.time() - start_time
                     
-                    # Return failure result.
                     return {
                         "success": False,
                         "result": None,
@@ -139,16 +125,12 @@ class RetryHandler:
                         "error_type": type(e).__name__
                     }
                 
-                # Increment retry counter.
                 retries += 1
                 
-                # Log the retry.
                 logger.warning(
                     f"Retry {retries}/{max_retries} after error: {str(e)}"
                 )
                 
-                # Wait before retrying.
                 time.sleep(current_delay)
                 
-                # Increase delay for next retry (exponential backoff).
                 current_delay *= backoff_factor

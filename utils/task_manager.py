@@ -28,18 +28,18 @@ class Task:
         self.name = name
         self.description = description
         self.tool = tool
-        self.params = params or {}  # Initialize params (not arguments)
+        self.params = params or {}
         self.max_retries = max_retries
         self.depends_on = depends_on or []
         self.status = TaskStatus.PENDING
         self.retry_count = 0
-        self.errors = []  # Initialize empty errors list
-        self.error = None  # Initialize error attribute
-        self.logs = []  # Initialize logs attribute
+        self.errors = []
+        self.error = None
+        self.logs = []
         self.result = None
         self.started_at = None
         self.completed_at = None
-        self.created_at = datetime.now()  # Initialize created_at attribute
+        self.created_at = datetime.now()
 
     def update_status(self, status: TaskStatus, result: Any = None, error: Any = None):
         self.status = status
@@ -85,42 +85,32 @@ class TaskManager:
 
     @staticmethod
     def get_current_time() -> datetime:
-        """Return the current UTC time."""
         return datetime.utcnow()
 
     def add_task(self, task: Task) -> str:
-        """Add a new task to the manager and return its ID."""
         self.tasks.append(task)
         self.logger.info(f"Added task: {task.name} (ID: {task.id})")
         return task.id
 
     def has_task(self, task_id: str) -> bool:
-        """Check if a task with the given ID already exists."""
         return any(task.id == task_id for task in self.tasks)
 
     def get_task(self, task_id: str) -> Optional[Task]:
-        """Retrieve a task by its ID."""
         for task in self.tasks:
             if task.id == task_id:
                 return task
         return None
 
     def get_all_tasks(self) -> List[Task]:
-        """Return a list of all tasks."""
         return self.tasks
 
     def get_tasks_by_status(self, status: TaskStatus) -> List[Task]:
-        """Return tasks filtered by status."""
         return [task for task in self.tasks if task.status == status]
 
     def update_task(self, task: Task) -> None:
-        """Update a task record (tasks are stored by reference)."""
         self.logger.info(f"Updated task {task.id} status to {task.status.value}")
 
     def get_next_executable_task(self) -> Optional[Task]:
-        """
-        Return the next task that is pending and whose dependencies are met.
-        """
         for task in self.tasks:
             if task.status != TaskStatus.PENDING:
                 continue
@@ -142,9 +132,8 @@ class TaskManager:
         return task_manager
 
     def create_task_from_dict(self, task_dict: Dict[str, Any]) -> Task:
-        # Preserve the id if it exists in the dict.
         task = Task(
-            id=task_dict.get("id"),  # Now include the id from the dict if present.
+            id=task_dict.get("id"),
             name=task_dict["name"],
             tool=task_dict["tool"],
             params=task_dict["params"],
@@ -155,5 +144,4 @@ class TaskManager:
         return task
 
     def to_dict(self) -> Dict[str, Any]:
-        """Return a dictionary representation of all tasks."""
         return {"tasks": [task.to_dict() for task in self.tasks]}

@@ -10,24 +10,13 @@ from utils.retry import retry_operation
 logger = logging.getLogger(__name__)
 
 class SQLMapScanner:
-    """
-    Wrapper for sqlmap to test for SQL injection vulnerabilities and extract data.
-    """
 
     def __init__(self, binary_path: str = "sqlmap", sudo: bool = False):
-        """
-        Initialize the SQLMapScanner.
-
-        Args:
-            binary_path: Path to the sqlmap executable.
-            sudo: Whether to run sqlmap with sudo.
-        """
         self.binary_path = binary_path
         self.sudo = sudo
         self.verify_installation()
 
     def verify_installation(self):
-        """Verify that sqlmap is installed and accessible."""
         cmd = [self.binary_path, "--version"]
         if self.sudo:
             cmd.insert(0, "sudo")
@@ -49,29 +38,16 @@ class SQLMapScanner:
         extra_args: str,
         output_dir: str
     ) -> List[str]:
-        """
-        Build the sqlmap command.
-
-        Args:
-            target_url: The URL to test.
-            extra_args: Additional sqlmap arguments.
-            output_dir: Directory to save sqlmap outputs.
-
-        Returns:
-            List of command elements.
-        """
         cmd = []
         if self.sudo:
             cmd.append("sudo")
         cmd.append(self.binary_path)
         
-        # Ensure URL has protocol
         if not target_url.startswith(('http://', 'https://')):
             target_url = f"http://{target_url}"
             
         cmd.extend(["-u", target_url, "--batch", "--output-dir", output_dir])
         
-        # Only add extra arguments if provided
         if extra_args:
             cmd.extend(shlex.split(extra_args))
         return cmd
@@ -84,35 +60,18 @@ class SQLMapScanner:
         timeout: int = 600,
         **kwargs
     ) -> Dict[str, Any]:
-        """
-        Run a sqlmap scan against a target URL.
-
-        Args:
-            target_url: The URL to test for SQL injection.
-            extra_args: Additional sqlmap arguments.
-            timeout: Timeout in seconds.
-            **kwargs: Additional sqlmap parameters (e.g., dbs, risk) that will be converted to command-line options.
-
-        Returns:
-            Dictionary with scan results (text output and metadata).
-        """
         with tempfile.TemporaryDirectory(prefix="sqlmap_output_") as output_dir:
             try:
-                # Process additional kwargs as sqlmap parameters
                 additional_args = []
-                # List of sqlmap flags that don't take values
                 flag_options = ["dbs", "batch", "dump-all", "forms", "tables", "columns", "current-user", "current-db"]
                 
                 for key, value in kwargs.items():
                     if value is not None:
-                        if key in flag_options:  # If it's a flag
-                            # If value is True or 'all', just add the flag without a value
+                        if key in flag_options:
                             if value is True or value == 'all':
                                 additional_args.append(f"--{key}")
-                        else:  # If not a flag, use regular key=value format
                             additional_args.append(f"--{key}={value}")
                 
-                # Combine with extra_args
                 if additional_args:
                     if extra_args:
                         extra_args += " " + " ".join(additional_args)
@@ -123,7 +82,6 @@ class SQLMapScanner:
                 command_str = " ".join(cmd)
                 logger.info(f"Executing sqlmap scan: {command_str}")
                 
-                # Log full environment details to debug issues
                 logger.debug(f"Current working directory: {os.getcwd()}")
                 logger.debug(f"Output directory exists: {os.path.exists(output_dir)}")
                 

@@ -4,7 +4,6 @@ import os
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-# Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.task_manager import Task, TaskManager, TaskStatus
@@ -16,12 +15,12 @@ class TestTask:
         
         assert task.description == "Run nmap scan on example.com"
         assert task.status == TaskStatus.PENDING
-        assert task.retry_count == 0  # Changed from attempts to retry_count
+        assert task.retry_count == 0
         assert task.created_at is not None
         assert task.started_at is None
         assert task.completed_at is None
         assert task.result is None
-        assert task.error is None  # Changed from error_message to error
+        assert task.error is None
     
     def test_update_status_running(self):
         """Test updating task status to running"""
@@ -134,7 +133,6 @@ class TestTaskManager:
         """Test getting the next executable task"""
         manager = TaskManager()
         
-        # Create tasks with dependencies
         task1 = Task(name="Task 1")
         task2 = Task(name="Task 2", depends_on=[task1.id])
         task3 = Task(name="Task 3", depends_on=[task2.id])
@@ -143,22 +141,17 @@ class TestTaskManager:
         manager.add_task(task2)
         manager.add_task(task3)
         
-        # Task 1 should be the next executable (no dependencies)
         next_task = manager.get_next_executable_task()
         assert next_task == task1
         
-        # Mark task1 as completed
         task1.update_status(TaskStatus.COMPLETED)
         
-        # Task 2 should be the next executable now
         next_task = manager.get_next_executable_task()
         assert next_task == task2
         
-        # Mark all tasks as completed
         task2.update_status(TaskStatus.COMPLETED)
         task3.update_status(TaskStatus.COMPLETED)
         
-        # No more executable tasks
         next_task = manager.get_next_executable_task()
         assert next_task is None
     
